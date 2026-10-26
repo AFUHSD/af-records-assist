@@ -1,0 +1,28 @@
+FICTIONAL sample record for demonstrations. Every name, number and address below is invented.
+
+From: Principal, Desert Edge High School <principal.deh@aguafria.org>
+To: Band Director <band.deh@aguafria.org>; Assistant Principal <ap2.deh@aguafria.org>
+Cc: Travel Vendor <bookings@sunsettours-example.com>
+Date: Tue, 3 Feb 2026 07:42:11 -0700
+Subject: Re: Spring band trip - Anaheim vs Flagstaff cost comparison
+
+Team,
+
+After the board workshop we are going with Flagstaff. The cost comparison attached shows $412 per student versus $1,180
+for Anaheim, and the boosters confirmed they can cover the bus.
+
+Two things to handle before we announce:
+
+1. Jordan Ellery (student ID 2048113) cannot travel overnight because of his seizure disorder; his mother Priya Ellery
+   (602-555-0142, priya.ellery@example.net) asked that his 504 plan accommodations be reviewed before any trip.
+2. Marcus Tate was suspended for two days last week after the parking lot incident and the band director should decide
+   whether he is eligible. His DOB 04/12/2009 puts him under 18 so a guardian signature is required either way.
+
+Please keep both items off the parent announcement. The boosters' treasurer, Dana Whitfield, lives at 1414 W Mesquite Ln
+and has offered her garage for instrument storage the night before departure.
+
+Our attorney advised that the vendor's cancellation clause is enforceable and recommended we not dispute the Anaheim
+deposit; keep that between us for now.
+
+Thanks,
+Principal
