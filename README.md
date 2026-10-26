@@ -62,6 +62,9 @@ Keys and tokens are read from the environment only and never printed. Set them i
 
 Owned by Luke Allpress and Mike Riley (AFUHSD). Start here:
 
+- **`docs/2026-10-26-decisions.md`**: what the records staff told us about the work, the twelve decisions from
+  the first working session (query first, then redaction; benchmark the self-hosted model against Claude on
+  both; an estimate step before review; Vault access stays with Technology), and the open questions.
 - **The Agentic Builders cookbook**, the K-12 practitioner commons this came out of:
   https://lukeallpress.github.io/agentic-builders-commons/cookbook.html. The recipe to read first is
   Peninsula School District's **`public-records-request-system`** (Kris Hagel): the full pipeline this prototype
