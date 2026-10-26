@@ -58,6 +58,22 @@ Keys and tokens are read from the environment only and never printed. Set them i
 - No PDF burn-in, no OCR, no review queue, no exemption-log table. The log here is markdown.
 - The samples are fictional. Never put a real record in `samples/`; run the tool on a file outside the repo.
 
+## Owners, and where to read next
+
+Owned by Luke Allpress and Mike Riley (AFUHSD). Start here:
+
+- **The Agentic Builders cookbook**, the K-12 practitioner commons this came out of:
+  https://lukeallpress.github.io/agentic-builders-commons/cookbook.html. The recipe to read first is
+  Peninsula School District's **`public-records-request-system`** (Kris Hagel): the full pipeline this prototype
+  takes its two steps from, with the reproduction prompt, the data map, and the lessons they learned building it
+  as the cases came in. Read it end to end before extending this repo; the next pieces (Vault matter, hold,
+  export and ingest; the review queue; redactions that must cite an exemption; installment releases) are
+  all laid out there.
+- **Peninsula's public code**: https://github.com/psd401. Their records system itself is not public, but their
+  CI library and Claude Code plugin system are, and the recipe describes the records system's shape.
+- **This repo's two prompts and the `EXEMPTIONS` table** in `records_assist.py` are the parts to tune first;
+  the Arizona statute references live there and nowhere else.
+
 ## License
 
 MIT. See `LICENSE`.
