@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% import "_wizard.html" as wizard %}
+{% block title %}New request · Records Assist{% endblock %}
+{% block screen %}intake{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Step 1 of 5</p>
+    <h1>New public records request</h1>
+  </div>
+</div>
+{{ wizard.guide('Paste the request (or upload the email it came in), fill in who sent it, then press Create. The AI drafts a Google Vault search plan next.') }}
+
+<form id="intake-form" class="grid-intake" method="post" action="{{ url_for('create_request') }}" enctype="multipart/form-data"
+      data-wait="Reading the request and drafting a search plan. This usually takes 30 to 40 seconds.">
+  <section class="card">
+    <div class="field">
+      <div class="label-row">
+        <label for="request_text">The request</label>
+        <button type="button" class="link" data-fill="#request_text" data-fill-from="#sample-request" data-tip="intake-sample">Use the fictional sample request</button>
+      </div>
+      <textarea id="request_text" data-tip="intake-text" name="request_text" rows="14" placeholder="Paste the request here: the email body, the form text, or a phone summary."></textarea>
+    </div>
+
+    <div class="divider"><span>or</span></div>
+
+    <label class="dropzone" for="request_file" data-tip="intake-file">
+      <input type="file" id="request_file" name="request_file" accept=".txt,.eml,.md" class="visually-hidden" data-file-label="#request_file_name">
+      <span class="dropzone-title">Upload the request</span>
+      <span class="muted" id="request_file_name">An email saved as .eml, or a .txt file. Drop it here or click to choose.</span>
+    </label>
+  </section>
+
+  <aside class="card stack">
+    <h2 class="h3">About the request</h2>
+    <div class="field">
+      <label for="requester_name">Requester name</label>
+      <input id="requester_name" name="requester_name" autocomplete="off" placeholder="Optional">
+    </div>
+    <div class="field">
+      <label for="requester_contact">Requester email or phone</label>
+      <input id="requester_contact" data-tip="intake-contact" name="requester_contact" autocomplete="off" placeholder="Optional">
+    </div>
+    <div class="field">
+      <label for="received">Date received</label>
+      <input id="received" name="received" type="date" value="{{ today }}">
+    </div>
+    <div class="field">
+      <label for="model">Draft the search plan with</label>
+      <select id="model" name="model" data-tip="intake-model">
+        {% for key, label in models.items() %}
+          <option value="{{ key }}" {% if key == 'claude' %}selected{% endif %} {% if model_status[key] %}disabled{% endif %}>
+            {{ label }}{% if model_status[key] %} (offline){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <p class="hint">The request holds no student records, so Claude is fine for this step.</p>
+    </div>
+    {% if not allow_real %}
+    <label class="check">
+      <input type="checkbox" name="fictional" value="yes" required>
+      <span>This request is fictional test data.</span>
+    </label>
+    {% endif %}
+  </aside>
+</form>
+<template id="sample-request">{{ sample }}</template>
+
+{% call wizard.bar('Step 1 of 5 · The request', url_for('home'), 'Cancel', 'The search plan takes about 30 to 40 seconds') %}
+  <button class="btn btn-primary" type="submit" form="intake-form" data-tip="intake-go">Create and draft the search plan →</button>
+{% endcall %}
+{% endblock %}

@@ -1,0 +1,122 @@
+{
+  "note": "FICTIONAL. Answer key for benchmark.py. 'hide' items should disappear from the proposed redaction; an item is caught when every fragment is gone, partial when some are. 'by' says which pass is expected to catch it: 'pattern' (deterministic, before any model) or 'model'. 'keep' items are public and should stay visible. Judgment calls (a booster officer's name, an attorney's name) are left out of both lists on purpose. Labels here are the reviewer's view, not legal advice.",
+  "records": [
+    {
+      "file": "samples/email-export.txt",
+      "title": "Band trip decision (original sample)",
+      "hide": [
+        {"id": "phone", "what": "Parent's phone", "by": "pattern", "fragments": ["602-555-0142"]},
+        {"id": "parent-email", "what": "Parent's personal email", "by": "pattern", "fragments": ["priya.ellery@example.net"]},
+        {"id": "dob", "what": "Student date of birth", "by": "pattern", "fragments": ["04/12/2009"]},
+        {"id": "student-id", "what": "Student ID", "by": "pattern", "fragments": ["2048113"]},
+        {"id": "jordan", "what": "Student name tied to health", "by": "model", "fragments": ["Jordan Ellery"]},
+        {"id": "seizure", "what": "Student health condition", "by": "model", "fragments": ["seizure disorder"]},
+        {"id": "504", "what": "Student 504 plan status", "by": "model", "fragments": ["504 plan"]},
+        {"id": "priya", "what": "Parent name (identifies the student)", "by": "model", "fragments": ["Priya Ellery"]},
+        {"id": "marcus", "what": "Student name tied to discipline", "by": "model", "fragments": ["Marcus Tate"]},
+        {"id": "suspension", "what": "Discipline details", "by": "model", "fragments": ["suspended for two days", "parking lot incident"]},
+        {"id": "home-address", "what": "Private citizen's home address", "by": "model", "fragments": ["1414 W Mesquite Ln"]},
+        {"id": "privilege", "what": "Attorney advice (two lines)", "by": "model", "fragments": ["cancellation clause is enforceable", "keep that between us"]}
+      ],
+      "keep": [
+        {"text": "principal.deh@aguafria.org", "why": "District address, official capacity"},
+        {"text": "$412 per student", "why": "Public cost figure from a board workshop"},
+        {"text": "bookings@sunsettours-example.com", "why": "Vendor business email"}
+      ]
+    },
+    {
+      "file": "samples/benchmark/track-coach-email.txt",
+      "title": "Track meet logistics, unrelated student in passing",
+      "hide": [
+        {"id": "devon", "what": "Athlete name tied to injury", "by": "model", "fragments": ["Devon Okafor"]},
+        {"id": "acl", "what": "Athlete injury", "by": "model", "fragments": ["torn ACL"]},
+        {"id": "kayla", "what": "Unrelated student mentioned in passing", "by": "model", "fragments": ["Kayla Brandt"]},
+        {"id": "eating-disorder", "what": "Unrelated student's health", "by": "model", "fragments": ["eating disorder"]}
+      ],
+      "keep": [
+        {"text": "Luis Ferreira", "why": "Coach, official capacity"},
+        {"text": "$1,240", "why": "Public spending"},
+        {"text": "March 14", "why": "Public event date"},
+        {"text": "623-555-0187", "why": "District office phone"}
+      ]
+    },
+    {
+      "file": "samples/benchmark/board-recap-email.txt",
+      "title": "Public board meeting recap (over-redaction trap)",
+      "hide": [
+        {"id": "initials", "what": "Student initials tied to expulsion", "by": "model", "fragments": ["R.M."]}
+      ],
+      "keep": [
+        {"text": "Trevor Hollis", "why": "Board member, public vote"},
+        {"text": "Renata Voss", "why": "Spoke in the call to the public"},
+        {"text": "Gloria Saenz", "why": "Board president"},
+        {"text": "$2.3 million", "why": "Public budget"},
+        {"text": "2100 W Cotton Ln", "why": "District office address"},
+        {"text": "(623) 555-0100", "why": "District main line"}
+      ]
+    },
+    {
+      "file": "samples/benchmark/counselor-followup-email.txt",
+      "title": "Students identified without names",
+      "hide": [
+        {"id": "wrestler", "what": "Student identified by description", "by": "model", "fragments": ["only girl on our varsity wrestling team"]},
+        {"id": "pregnancy", "what": "Student health", "by": "model", "fragments": ["pregnant"]},
+        {"id": "jr", "what": "Student initials", "by": "model", "fragments": ["J.R."]},
+        {"id": "iep", "what": "Special education status", "by": "model", "fragments": ["IEP with a behavior intervention plan", "IEP team meeting"]}
+      ],
+      "keep": [
+        {"text": "Nadia Kerr", "why": "Assistant principal, official capacity"},
+        {"text": "Mr. Dalton", "why": "Teacher, official capacity"}
+      ]
+    },
+    {
+      "file": "samples/benchmark/hr-leave-email.txt",
+      "title": "Employee medical leave",
+      "hide": [
+        {"id": "ssn", "what": "Social Security number", "by": "pattern", "fragments": ["123-45-6789"]},
+        {"id": "personal-email", "what": "Employee personal email", "by": "pattern", "fragments": ["m.corliss.home@example.com"]},
+        {"id": "personal-phone", "what": "Employee personal phone", "by": "pattern", "fragments": ["480-555-0199"]},
+        {"id": "diagnosis", "what": "Employee medical information", "by": "model", "fragments": ["chemotherapy", "breast cancer"]},
+        {"id": "home-address", "what": "Employee home address", "by": "model", "fragments": ["7720 N Saguaro Ridge Dr"]},
+        {"id": "dependents", "what": "Employee's children", "by": "model", "fragments": ["two kids"]}
+      ],
+      "keep": [
+        {"text": "Owen Pruitt", "why": "Substitute, official capacity"},
+        {"text": "$58,400", "why": "Public employee salary"},
+        {"text": "$185", "why": "Posted public rate"}
+      ]
+    },
+    {
+      "file": "samples/benchmark/parent-complaint-thread.txt",
+      "title": "Forwarded thread with counsel's advice",
+      "hide": [
+        {"id": "parent-email", "what": "Parent's personal email", "by": "pattern", "fragments": ["helen.moreau@example.org"]},
+        {"id": "ava", "what": "Student full name", "by": "model", "fragments": ["Ava Lindqvist"]},
+        {"id": "ava-first", "what": "Student first name used alone later", "by": "model", "fragments": ["Ava's mom", "Ava and the band trip"]},
+        {"id": "diabetes", "what": "Student health", "by": "model", "fragments": ["type 1 diabetes"]},
+        {"id": "helen", "what": "Parent name (identifies the student)", "by": "model", "fragments": ["Helen Moreau"]},
+        {"id": "privilege", "what": "Attorney advice (three lines)", "by": "model", "fragments": ["do not reverse the eligibility decision in writing", "our exposure is limited", "keep communication with the family verbal"]}
+      ],
+      "keep": [
+        {"text": "please hold", "why": "Principal's own instruction, not privileged"}
+      ]
+    }
+  ],
+  "query": {
+    "file": "samples/request.txt",
+    "today": "2026/10/26",
+    "note": "A small hand-written mailbox, searched the way Vault's Terms line works (any quoted phrase in the message). Real proof is Vault's Count on real accounts.",
+    "mailbox": [
+      {"id": "bus-quote", "responsive": true, "text": "Subject: Flagstaff bus quote. The vendor sent the bus quote for the Flagstaff trip. -- Band Director, Desert Edge High School"},
+      {"id": "deposit", "responsive": true, "text": "Subject: Deposit question. Can we get the Anaheim deposit back if we cancel? -- Principal, Desert Edge High School"},
+      {"id": "board-packet", "responsive": true, "text": "Subject: For the board packet. Attached is the band trip cost comparison for the February workshop. -- Business Office, Agua Fria Union High School District"},
+      {"id": "complaint", "responsive": true, "text": "Subject: Unhappy parent. Why was the spring trip moved? My son was looking forward to Disneyland all year."},
+      {"id": "boosters", "responsive": true, "text": "Subject: Bus money. The boosters confirmed they will pay for the bus to Flagstaff. -- Assistant Principal, Desert Edge High School"},
+      {"id": "bell-schedule", "responsive": false, "text": "Subject: Testing week. Here is the adjusted bell schedule. -- Assistant Principal, Desert Edge High School"},
+      {"id": "homecoming", "responsive": false, "text": "Subject: Homecoming court. Voting opens Monday in the library. -- Student Activities, Desert Edge High School"},
+      {"id": "concessions", "responsive": false, "text": "Subject: Friday night. The football booster club needs concession stand volunteers. -- Athletic Director, Desert Edge High School"},
+      {"id": "badges", "responsive": false, "text": "Subject: Badge photos. A reminder from the district office: update your badge photo by Friday. -- Human Resources, Agua Fria Union High School District"},
+      {"id": "choir", "responsive": false, "text": "Subject: Choir festival. The choir festival in Tucson is April 9; the bus request is attached. -- Choir Director, Desert Edge High School"}
+    ]
+  }
+}

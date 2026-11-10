@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Records Assist{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-screen="{% block screen %}{% endblock %}">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('home') }}" title="All requests">
+      <img class="brand-logo" src="{{ url_for('static', filename='afuhsd-logo.png') }}" alt="Agua Fria High School District" width="145" height="28">
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-text">
+        <span class="brand-name">PPR Generator</span>
+        <span class="brand-sub">Public records requests</span>
+      </span>
+    </a>
+    <label class="pt-switch tips-switch" title="Numbered tips beside the controls on each screen. Stays on until you turn it off.">
+      <input type="checkbox" data-tips-toggle>
+      <span class="pt-track"><span class="pt-knob"></span></span>
+      Show tips
+    </label>
+    <a class="help-btn" href="{{ url_for('help_page') }}" title="Help: how this works and how to test it" aria-label="Help" data-tip="help">?</a>
+    <ul class="model-status" aria-label="AI models" data-tip="models">
+      {% for key, label in models.items() %}
+        <li class="pill {{ 'pill-ok' if model_status[key] is none else 'pill-off' }}" title="{{ model_status[key] or 'Ready' }}">
+          <span class="dot" aria-hidden="true"></span>{{ label }}: {{ 'ready' if model_status[key] is none else 'offline' }}
+        </li>
+      {% endfor %}
+    </ul>
+  </header>
+
+  {% if not allow_real %}
+  <div class="banner" role="note">
+    <strong>Prototype.</strong> Fictional records only until the district decides where record content may go.
+    Every search plan and every redaction is a suggestion that a person approves.
+  </div>
+  {% endif %}
+
+  <main id="main" class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <div class="overlay" id="overlay" hidden>
+    <div class="overlay-card" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="overlay-text">Working…</p>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog class="modal" id="confirm-modal" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <form method="dialog">
+      <h2 class="h3" id="confirm-title"></h2>
+      <p class="muted" id="confirm-body"></p>
+      <div class="modal-actions">
+        <button class="btn" value="cancel" id="confirm-cancel">Cancel</button>
+        <button class="btn btn-primary" value="ok" id="confirm-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <!-- Product tour: numbered tips beside the controls (static/product-tour.js), the tips themselves in static/tips.js -->
+  <script src="{{ url_for('static', filename='product-tour.js') }}"></script>
+  <script src="{{ url_for('static', filename='tips.js') }}"></script>
+  {% block scripts %}{% endblock %}
+  <!-- Site Feedback: reviewers click Feedback, then any part of the page, and comments land at apps.aguafria.org/feedback -->
+  <script src="https://apps.aguafria.org/feedback/widget.js" data-project="af-records-assist"></script>
+</body>
+</html>

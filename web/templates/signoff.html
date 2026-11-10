@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% import "_wizard.html" as wizard %}
+{% block title %}{{ req.id }} sign off · Records Assist{% endblock %}
+{% block screen %}signoff-{{ 'done' if req.signed_off_at else 'open' }}{% endblock %}
+{% block content %}
+{% include "_steps.html" %}
+
+{% set all_s = req.records | map(attribute='suggestions') | sum(start=[]) %}
+{% set pending = all_s | selectattr('decision', 'equalto', 'pending') | list | length %}
+{% set unchecked = req.records | rejectattr('checked_at') | list | length %}
+{% set blocked = pending or unchecked or not req.records %}
+{% if req.signed_off_at %}
+  {{ wizard.guide('This request is finished. Download the release files below and give each one a final read before it goes to the requester.') }}
+{% else %}
+  {{ wizard.guide('Check the summary, type your name, and sign off. That saves one redacted file per email for the requester and an internal log of every decision.') }}
+{% endif %}
+
+<div class="grid-2">
+  <section class="card stack">
+    <h2 class="h3">Summary</h2>
+    <dl class="facts" data-tip="signoff-summary">
+      <div><dt>Records</dt><dd>{{ req.records | length }}{% if unchecked %} <span class="error">({{ unchecked }} not checked)</span>{% endif %}</dd></div>
+      <div><dt>Redactions approved</dt><dd>{{ all_s | selectattr('decision', 'equalto', 'approve') | list | length }}</dd></div>
+      <div><dt>Suggestions kept visible</dt><dd>{{ all_s | selectattr('decision', 'equalto', 'reject') | list | length }}</dd></div>
+      <div><dt>Still to decide</dt><dd class="{{ 'error' if pending }}">{{ pending }}</dd></div>
+      <div><dt>Vault count</dt><dd>{{ '{:,}'.format(req.vault.count) ~ ' messages' if req.vault.count is not none else 'not recorded' }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="card stack">
+    {% if req.signed_off_at %}
+      <h2 class="h3">Signed off</h2>
+      <p>By <strong>{{ req.signed_off_by }}</strong> on {{ req.signed_off_at | when }}.</p>
+      {% for name in req.outputs if name.endswith('.zip') %}
+        <a class="btn btn-primary" href="{{ url_for('download', rid=req.id, name=name) }}" data-tip="signoff-zip">Download all for release (.zip)</a>
+        <p class="hint">The zip holds one PDF with every redacted record in order, plus each record as a text file. The internal log is not in it.</p>
+      {% endfor %}
+      <ul class="files" data-tip="signoff-files">
+        {% for name in req.outputs if not name.endswith('.zip') %}
+          <li>
+            <a href="{{ url_for('download', rid=req.id, name=name) }}">{{ name }}</a>
+            {% if 'INTERNAL' in name %}<span class="chip chip-warn">internal, do not release</span>
+            {% elif name.endswith('.pdf') %}<span class="chip chip-ok">all records, one PDF</span>
+            {% else %}<span class="chip chip-ok">for release</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      <p class="hint">Saved in out/requests/{{ req.id }}/release on this computer. Give the PDF a final read before it goes to the requester.</p>
+      <form method="post" action="{{ url_for('reopen', rid=req.id) }}">
+        <button class="btn btn-ghost btn-sm" type="submit" data-tip="signoff-reopen">Reopen for changes</button>
+      </form>
+    {% else %}
+      <h2 class="h3">Sign off</h2>
+      <p class="muted">Signing off saves one redacted file per record for release and an internal log of every decision.</p>
+      <form method="post" action="{{ url_for('sign_off', rid=req.id) }}" class="stack" id="signoff-form">
+        <div class="field">
+          <label for="reviewer">Reviewer name</label>
+          <input id="reviewer" name="reviewer" data-tip="signoff-name" required autocomplete="name">
+        </div>
+        {% if blocked %}
+          <p class="hint">Every record needs a redaction check and a decision on every suggestion first.</p>
+        {% endif %}
+      </form>
+    {% endif %}
+  </section>
+</div>
+
+{% set pages = req.records | map(attribute='text') | map('pages') | sum %}
+<section class="card stack" id="cost" data-tip="signoff-cost">
+  <div class="label-row">
+    <h2 class="h3">What this request cost</h2>
+    <span class="muted small">real token counts from every model reply, at Anthropic list price</span>
+  </div>
+  <div class="grid-2">
+    <dl class="facts">
+      <div><dt>AI processing</dt><dd>${{ '%.2f' % totals.total_usd }} <span class="muted small">({{ totals.calls }} call{{ 's' if totals.calls != 1 }}, {{ '{:,}'.format(totals.input_tokens) }} tokens in, {{ '{:,}'.format(totals.output_tokens) }} out)</span></dd></div>
+      <div><dt>Copies</dt><dd>${{ '%.2f' % (pages * page_rate) }} <span class="muted small">({{ pages }} page{{ 's' if pages != 1 }} at ${{ '%.2f' % page_rate }} per page, district policy)</span></dd></div>
+      <div><dt>Total to collect</dt><dd><strong class="estimate-total">${{ '%.2f' % (totals.total_usd + pages * page_rate) }}</strong></dd></div>
+      {% if req.estimate and req.estimate.quoted %}
+        <div><dt>Quoted to requester</dt><dd>${{ '%.2f' % req.estimate.quoted.total_usd }} on {{ req.estimate.sent_at | when }} <span class="muted small">(their answer: {{ req.estimate.decision or 'none recorded' }})</span></dd></div>
+      {% endif %}
+    </dl>
+    <table class="table table-compact">
+      <thead><tr><th scope="col">Step</th><th scope="col">Model</th><th scope="col">Calls</th><th scope="col">Tokens in</th><th scope="col">Tokens out</th><th scope="col">Cost</th></tr></thead>
+      <tbody>
+        {% for u in req.usage or [] | groupby('step') %}
+          {% for m in u.list | groupby('model') %}
+            <tr>
+              <td>{{ step_names[u.grouper] }}</td>
+              <td><span class="chip chip-{{ m.grouper }}">{{ models[m.grouper] }}</span></td>
+              <td>{{ m.list | length }}</td>
+              <td>{{ '{:,}'.format(m.list | sum(attribute='input_tokens')) }}</td>
+              <td>{{ '{:,}'.format(m.list | sum(attribute='output_tokens')) }}</td>
+              <td>${{ '%.2f' % (m.list | sum(attribute='cost_usd')) }}</td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="6" class="muted">No model calls recorded for this request.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">The full call-by-call list goes in the internal log at sign-off. The rig costs nothing per call; Claude is priced from the table in records_assist.py.</p>
+</section>
+
+<section class="card card-flush">
+  <table class="table">
+    <thead><tr><th scope="col">Record</th><th scope="col">Redact</th><th scope="col">Keep</th><th scope="col">To decide</th><th scope="col">Checked by</th></tr></thead>
+    <tbody>
+      {% for r in req.records %}
+        <tr>
+          <td>{% if r.checked_at %}<a href="{{ url_for('review_page', rid=req.id, rec=r.id) }}">{{ r.id }} {{ r.name }}</a>{% else %}{{ r.id }} {{ r.name }}{% endif %}</td>
+          <td>{{ r.suggestions | selectattr('decision', 'equalto', 'approve') | list | length }}</td>
+          <td>{{ r.suggestions | selectattr('decision', 'equalto', 'reject') | list | length }}</td>
+          <td>{{ r.suggestions | selectattr('decision', 'equalto', 'pending') | list | length }}</td>
+          <td class="muted">{% for m in r.models %}{{ models[m] }}{{ ' + ' if not loop.last }}{% else %}not checked{% endfor %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% call wizard.bar('Step 5 of 5 · Sign off', url_for('review_page', rid=req.id), 'Review',
+                   'Finished' if req.signed_off_at else (pending ~ ' suggestions still to decide' if pending else 'Ready to sign off')) %}
+  {% if req.signed_off_at %}
+    <a class="btn btn-primary" href="{{ url_for('home') }}">Back to all requests</a>
+  {% else %}
+    <button class="btn btn-primary" type="submit" form="signoff-form" {% if blocked %}disabled{% endif %} data-tip="signoff-go">Sign off and save the release ✓</button>
+  {% endif %}
+{% endcall %}
+{% endblock %}

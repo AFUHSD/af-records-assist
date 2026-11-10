@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block screen %}home{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Public records requests</h1>
+    <p class="muted">Each request moves through five steps: request, search plan, records, review, and sign off.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('new_request') }}" data-tip="home-new">New request</a>
+</div>
+
+{% if requests %}
+  <div class="card card-flush">
+    <table class="table">
+      <thead>
+        <tr><th scope="col">Request</th><th scope="col">What they asked for</th><th scope="col">Requester</th><th scope="col">Received</th><th scope="col">AI cost</th><th scope="col">Status</th></tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+          {% set label = status(r)[0] %}
+          <tr>
+            <td><a class="strong" href="{{ url_for('open_request', rid=r.id) }}">{{ r.id }}</a></td>
+            <td class="clip">{{ r.plan.summary if r.plan else r.request_text[:140] }}</td>
+            <td>{{ r.requester.name or '—' }}</td>
+            <td class="nowrap">{{ r.received }}</td>
+            <td class="nowrap">${{ '%.2f' % usage_totals(r.usage or []).total_usd }}</td>
+            <td><span class="chip chip-status {{ 'chip-done' if label == 'Done' else '' }}">{{ label }}</span></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="card empty">
+    <h2>No requests yet</h2>
+    <p class="muted">Start one by pasting a request. The fictional band trip request is one click away on the next page.</p>
+    <a class="btn btn-primary" href="{{ url_for('new_request') }}" data-tip="home-new">Start a request</a>
+  </div>
+{% endif %}
+{% endblock %}

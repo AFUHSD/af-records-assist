@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% import "_wizard.html" as wizard %}
+{% block title %}{{ req.id }} records · Records Assist{% endblock %}
+{% block screen %}records-{{ 'empty' if not req.records else ('check' if req.records | rejectattr('checked_at') | list | length else 'done') }}{% endblock %}
+{% block content %}
+{% include "_steps.html" %}
+{% set unchecked = req.records | rejectattr('checked_at') | list | length %}
+{{ wizard.guide('Send Technology the search (1), add the export they send back (2), then run the redaction check. When it finishes, the review starts on its own.') }}
+
+<div class="grid-2">
+  <section class="card stack">
+    <h2 class="h3">1. Technology runs the Vault search</h2>
+    <p class="muted">Send Technology the search plan, then record what Vault's Count returned. Saving the count builds the cost estimate below.</p>
+    <p class="error"><strong>Remind them: export as .mbox, not PST.</strong> This app cannot read a PST file.</p>
+    {% if req.plan %}
+      <div class="terms terms-compact">
+        <div class="terms-row"><span class="terms-label">Gmail</span><code id="gmail-terms">{{ req.plan.gmail_terms }}</code><button type="button" class="btn btn-sm" data-copy="#gmail-terms">Copy</button></div>
+      </div>
+    {% endif %}
+    <form method="post" action="{{ url_for('save_vault', rid=req.id) }}" class="stack">
+      <div class="field-row">
+        <div class="field">
+          <label for="count">Vault Count (messages)</label>
+          <input id="count" name="count" data-tip="records-count" inputmode="numeric" value="{{ req.vault.count if req.vault.count is not none else '' }}" placeholder="e.g. 48">
+        </div>
+        <div class="field grow">
+          <label for="notes">Notes</label>
+          <input id="notes" name="notes" value="{{ req.vault.notes }}" placeholder="Who ran it, any changes to the search">
+        </div>
+      </div>
+      <button class="btn" type="submit">Save</button>
+    </form>
+  </section>
+
+  <section class="card stack">
+    <h2 class="h3">2. Add the exported records</h2>
+    <form method="post" action="{{ url_for('upload_records', rid=req.id) }}" enctype="multipart/form-data" class="stack" data-wait="Reading the export…">
+      <label class="dropzone" for="files" data-tip="records-upload">
+        <input type="file" id="files" name="files" multiple accept=".mbox,.eml,.txt" class="visually-hidden" data-file-label="#files_name">
+        <span class="dropzone-title">Upload the Vault export</span>
+        <span class="muted" id="files_name">.mbox from Vault, .eml emails, or .txt files. Drop them here or click to choose.</span>
+      </label>
+      <details>
+        <summary>Or paste one email</summary>
+        <label for="pasted" class="visually-hidden">Pasted email</label>
+        <textarea id="pasted" name="pasted" rows="6" placeholder="From: …&#10;Subject: …&#10;&#10;Body…"></textarea>
+      </details>
+      {% if not allow_real %}
+      <label class="check"><input type="checkbox" name="fictional" value="yes" required><span>These records are fictional test data.</span></label>
+      {% endif %}
+      <div class="row">
+        <button class="btn btn-primary" type="submit">Add records</button>
+      </div>
+    </form>
+    <form method="post" action="{{ url_for('add_samples', rid=req.id) }}">
+      <button class="link" type="submit" data-tip="records-samples">Add the 6 fictional sample emails instead</button>
+    </form>
+  </section>
+</div>
+
+{% if est %}
+{% set sent = req.estimate and req.estimate.sent_at %}
+{% set quoted = req.estimate.quoted if sent else est %}
+<section class="card stack" id="estimate" data-tip="estimate-card">
+  <div class="label-row">
+    <h2 class="h3">Cost estimate for the requester</h2>
+    {% if sent %}
+      {% if req.estimate.decision == 'proceed' %}<span class="chip chip-ok">Requester said proceed · {{ req.estimate.decided_at | when }}</span>
+      {% elif req.estimate.decision == 'declined' %}<span class="chip chip-warn">Requester declined · {{ req.estimate.decided_at | when }}</span>
+      {% else %}<span class="chip chip-status">Sent {{ req.estimate.sent_at | when }} · waiting on their answer</span>{% endif %}
+    {% else %}<span class="chip">Not sent yet</span>{% endif %}
+  </div>
+  <p class="muted">Decision 5 from the Oct 26 meeting: before anyone reviews a record, the requester sees what it will cost and confirms. The numbers come from Vault's Count and from what the model calls have actually cost.</p>
+  <div class="grid-2">
+    <div class="stack">
+      <dl class="facts estimate-facts">
+        <div><dt>Vault count</dt><dd>{{ '{:,}'.format(quoted.count) }} messages</dd></div>
+        <div><dt>AI processing</dt><dd>${{ '%.2f' % quoted.api_usd }} <span class="muted small">(${{ '%.3f' % quoted.per_record_usd }} per email{% if quoted.api_so_far_usd %}, ${{ '%.2f' % quoted.api_so_far_usd }} already spent{% endif %})</span></dd></div>
+        <div><dt>Copies</dt><dd>${{ '%.2f' % quoted.page_usd }} <span class="muted small">(about {{ '{:,}'.format(quoted.pages) }} pages at ${{ '%.2f' % quoted.page_rate_usd }} per page, district policy)</span></dd></div>
+        <div><dt>Estimated total</dt><dd><strong class="estimate-total">${{ '%.2f' % quoted.total_usd }}</strong></dd></div>
+      </dl>
+      <p class="hint">Basis: {{ quoted.basis }}.{% if sent and est.total_usd != quoted.total_usd %} The live figure is now ${{ '%.2f' % est.total_usd }}; the requester was told ${{ '%.2f' % quoted.total_usd }}.{% endif %}</p>
+      {% if not sent %}
+        <form method="post" action="{{ url_for('estimate_sent', rid=req.id) }}">
+          <button class="btn" type="submit" data-tip="estimate-sent">Mark as sent to the requester</button>
+        </form>
+      {% elif not req.estimate.decision %}
+        <form method="post" action="{{ url_for('estimate_decision', rid=req.id) }}" class="row">
+          <button class="btn btn-primary" name="decision" value="proceed" type="submit" data-tip="estimate-proceed">Requester said proceed</button>
+          <button class="btn" name="decision" value="declined" type="submit">Requester declined or will narrow</button>
+          <button class="btn btn-ghost btn-sm" name="decision" value="reset" type="submit">Start the estimate over</button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('estimate_decision', rid=req.id) }}">
+          <button class="btn btn-ghost btn-sm" name="decision" value="reset" type="submit">Start the estimate over</button>
+        </form>
+      {% endif %}
+    </div>
+    <div class="stack">
+{% set months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] %}
+{% set ymd = (req.received or '').split('-') %}
+{% set received = months[ymd[1]|int - 1] ~ ' ' ~ (ymd[2]|int) ~ ', ' ~ ymd[0] if ymd|length == 3 else req.received %}
+{% set name = (req.requester.name or '')|trim %}
+{% set greeting = 'Hello ' ~ name ~ ',' if name and not name.lower().startswith(('a ', 'an ', 'the ')) else 'Hello,' %}
+{% set contact = req.requester.contact or '' %}
+{% set est_body %}{{ greeting }}
+
+Thank you for your public records request, which we received on {{ received }}. Its reference number is {{ req.id }}.
+
+Our search found about {{ '{:,}'.format(quoted.count) }} messages that may be responsive. Before we review and prepare them, here is what producing them is estimated to cost:
+
+- AI-assisted processing: ${{ '%.2f' % quoted.api_usd }}
+- Copies, about {{ '{:,}'.format(quoted.pages) }} pages at ${{ '%.2f' % quoted.page_rate_usd }} per page: ${{ '%.2f' % quoted.page_usd }}
+- Estimated total: ${{ '%.2f' % quoted.total_usd }}
+
+This is an estimate. The final amount is based on the records actually produced and is due before release.
+
+Please reply with one of the following:
+1. Proceed with the request as written.
+2. Narrow the request (for example, a shorter date range or specific people or topics). A narrower request usually means fewer records and a lower cost.
+3. Withdraw the request.
+
+Payment: [how to pay goes here once the business office confirms it]
+
+Please include the reference number {{ req.id }} in your reply.
+
+Thank you,
+
+[Your name]
+[Your title]
+Agua Fria Union High School District{% endset %}
+      <div class="label-row">
+        <h3 class="h4">Email to the requester</h3>
+        <div class="row">
+          <button type="button" class="btn btn-sm" data-copy="#est-body">Copy message</button>
+          <button type="button" class="btn btn-sm btn-primary" data-tip="estimate-gmail" data-gmail data-to="{{ contact if '@' in contact else '' }}"
+                  data-subject="#est-subject" data-body="#est-body">Open in Gmail</button>
+        </div>
+      </div>
+      <p class="muted small">Edit anything before you send it. Edits here aren't saved; when it has gone, click "Mark as sent" so the request remembers what was quoted.</p>
+      <div class="field">
+        <label for="est-subject">Subject</label>
+        <input id="est-subject" value="Your public records request {{ req.id }}: estimated cost and your go-ahead">
+      </div>
+      <div class="field">
+        <label for="est-body">Message</label>
+        <textarea id="est-body" rows="20">{{ est_body }}</textarea>
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="card stack" id="records-card">
+  <div class="label-row">
+    <h2 class="h3">3. Run the redaction check</h2>
+    <span class="muted small">{{ req.records | length }} record{{ 's' if req.records | length != 1 }}</span>
+  </div>
+
+  {% if req.records %}
+    <fieldset class="models" data-tip="records-models">
+      <legend>Check with</legend>
+      {% for key, label in models.items() %}
+        <label class="check {{ 'is-off' if model_status[key] }}">
+          <input type="checkbox" name="check-model" value="{{ key }}" {% if not model_status[key] %}checked{% else %}disabled{% endif %}>
+          <span>{{ label }}{% if model_status[key] %} <span class="muted">({{ model_status[key] }})</span>{% endif %}</span>
+        </label>
+      {% endfor %}
+      <p class="hint">Checking with both shows the rig and Claude side by side on the review screen. The fixed rules (phones, emails, SSNs, labelled IDs) always run first.</p>
+    </fieldset>
+
+    <table class="table" id="records-table" data-check-url="{{ url_for('check_record', rid=req.id, rec_id='__ID__') }}"
+           data-review-url="{{ url_for('review_page', rid=req.id) }}">
+      <thead><tr><th scope="col">Record</th><th scope="col">Source</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+        {% for r in req.records %}
+          <tr data-record="{{ r.id }}" data-checked="{{ 'yes' if r.checked_at else 'no' }}">
+            <td><span class="strong">{{ r.id }}</span> {{ r.name }}</td>
+            <td class="muted">{{ r.source }}</td>
+            <td class="record-status">
+              {% if r.checked_at %}
+                <span class="chip chip-ok">{{ r.suggestions | length }} suggestion{{ 's' if r.suggestions | length != 1 }}</span>
+                <span class="muted small">by {% for m in r.models %}{{ models[m] }}{{ ' + ' if not loop.last }}{% endfor %}</span>
+              {% else %}
+                <span class="chip">Not checked</span>
+              {% endif %}
+              {% for e in r.errors %}<div class="error small">{{ e }}</div>{% endfor %}
+            </td>
+            <td class="actions">
+              <button type="button" class="btn btn-sm" data-check-one="{{ r.id }}" {% if loop.first %}data-tip="records-check-one"{% endif %}>{{ 'Check again' if r.checked_at else 'Check' }}</button>
+              <form method="post" action="{{ url_for('delete_record', rid=req.id, rec_id=r.id) }}" class="inline-form">
+                <button class="btn btn-sm btn-ghost" type="submit" aria-label="Remove {{ r.name }}">Remove</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="progress" id="check-progress" hidden>
+      <div class="progress-bar"><span id="check-bar"></span></div>
+      <p class="muted small" id="check-text" aria-live="polite"></p>
+    </div>
+
+  {% else %}
+    <p class="muted">No records yet. Add the Vault export above, or the fictional samples to try it out.</p>
+  {% endif %}
+</section>
+
+{% call wizard.bar('Step 3 of 5 · Records', url_for('plan_page', rid=req.id), 'Search plan',
+                   ('No records yet' if not req.records else (req.records | length) ~ ' records · ' ~ (req.records | length - unchecked) ~ ' checked')) %}
+  {% if not req.records %}
+    <button class="btn btn-primary" type="button" disabled>Run the redaction check →</button>
+  {% elif unchecked %}
+    <button class="btn btn-primary" type="button" id="check-all" data-tip="records-check-all">Run the redaction check ({{ unchecked }}) →</button>
+  {% else %}
+    <a class="btn btn-primary" href="{{ url_for('review_page', rid=req.id) }}" data-tip="records-review">Start the review →</a>
+  {% endif %}
+{% endcall %}
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='records.js') }}"></script>{% endblock %}
