@@ -30,12 +30,27 @@ import re
 import sys
 import textwrap
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 RIG_MODEL = os.environ.get("DISTRICT_LLM_MODEL", "llama3.1:8b")
 CLAUDE_MODEL = "claude-opus-5-5"
 RIG_CHUNK_CHARS = 6000  # 16k-token context on the rig; leave room for the prompt and the answer
+
+# What a model call costs, in US dollars per million tokens. Anthropic list price for the Claude API, checked
+# 2026-11-09 (platform.claude.com/docs pricing). The rig is district hardware: no per-token charge. Thinking tokens
+# bill as output tokens. When a price or model changes, change it here and nowhere else.
+PRICING = {
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00},
+    RIG_MODEL: {"input": 0.0, "output": 0.0},
+}
+
+
+def cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    """Dollars for one call. A model id missing from PRICING is charged at the dearest known rate, never at zero,
+    so a new model can only ever over-count until the table is updated."""
+    rate = PRICING.get(model_id) or max(PRICING.values(), key=lambda r: r["input"] + r["output"])
+    return (input_tokens * rate["input"] + output_tokens * rate["output"]) / 1_000_000
 
 # Candidate exemption labels. Labels, not legal advice: the reviewer confirms each with district counsel.
 EXEMPTIONS = {
@@ -87,6 +102,9 @@ The text field must be copied exactly from the record so it can be located. If n
 @dataclass
 class Provider:
     name: str
+    # Token counts of the most recent call, as the model reported them: {"model_id", "input_tokens", "output_tokens"}.
+    # None before the first call. The web app reads this after every call to keep a running cost per request.
+    last_usage: dict | None = field(default=None, init=False, repr=False)
 
     def complete(self, system: str, user: str, max_tokens: int = 2000) -> str:  # pragma: no cover - dispatch
         raise NotImplementedError
@@ -118,6 +136,9 @@ class Rig(Provider):
         )
         with self._opener.open(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        usage = data.get("usage") or {}
+        self.last_usage = {"model_id": data.get("model") or RIG_MODEL, "input_tokens": int(usage.get("prompt_tokens") or 0),
+                           "output_tokens": int(usage.get("completion_tokens") or 0)}
         return data["choices"][0]["message"]["content"]
 
 
@@ -139,6 +160,7 @@ class Claude(Provider):
             messages=[{"role": "user", "content": user}],
         ) as stream:
             msg = stream.get_final_message()
+        self.last_usage = {"model_id": msg.model, "input_tokens": msg.usage.input_tokens, "output_tokens": msg.usage.output_tokens}
         if msg.stop_reason == "refusal":
             sys.exit("claude: the model declined this request. Review the record by hand or try the rig.")
         return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
@@ -173,7 +195,17 @@ def cmd_query(args: argparse.Namespace) -> int:
     for key in ("gmail_terms", "drive_terms"):
         plan[key] = clean_terms(str(plan.get(key) or ""), request)
     print(render_plan(plan, provider.name))
+    print(usage_line(provider), file=sys.stderr)
     return 0
+
+
+def usage_line(provider: "Provider") -> str:
+    """One line for the terminal: the tokens the model reported for its last call and what they cost."""
+    u = provider.last_usage
+    if not u:
+        return "Model usage: not reported."
+    return (f"Model usage ({u['model_id']}): {u['input_tokens']:,} tokens in, {u['output_tokens']:,} out, "
+            f"${cost_usd(u['model_id'], u['input_tokens'], u['output_tokens']):.4f}")
 
 
 _ADDRESS_OP = re.compile(r"\b(?:from|to|cc|bcc|owner):\s*\S+@\S+", re.I)
@@ -307,6 +339,7 @@ def cmd_redact(args: argparse.Namespace) -> int:
             text = text.replace(s, f"[REDACTED: {cat}]")
             log.append({"text": s, "category": cat, "reason": str(span.get("reason", "")), "pass": provider.name})
     print(render_redaction(text, log, notes, provider.name))
+    print(usage_line(provider), file=sys.stderr)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)

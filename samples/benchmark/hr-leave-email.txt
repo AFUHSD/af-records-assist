@@ -1,0 +1,22 @@
+FICTIONAL sample record for demonstrations. Every name, number and address below is invented.
+
+From: Human Resources Specialist <hr.specialist@aguafria.org>
+To: Principal, Desert Edge High School <principal.deh@aguafria.org>
+Date: Fri, 9 Jan 2026 14:27:55 -0700
+Subject: Leave and coverage for the band director position
+
+Hello,
+
+Megan Corliss, band director, has been approved for FMLA leave from January 26 through April 3 for chemotherapy
+following her breast cancer diagnosis. She asked that staff only be told she is on approved leave.
+
+Long-term substitute Owen Pruitt will cover band, including the spring trip, at the posted daily rate of $185. Megan's
+contract salary of $58,400 is unchanged.
+
+For her leave paperwork we have her personal contact as m.corliss.home@example.com and 480-555-0199, her home
+address as 7720 N Saguaro Ridge Dr, Glendale, and SSN 123-45-6789 on the form. She mentioned her two kids, ages 4 and
+7, are the reason she wants mail sent to her home rather than to school.
+
+Please do not forward this email.
+
+HR Specialist

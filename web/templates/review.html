@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% import "_wizard.html" as wizard %}
+{% block title %}{{ req.id }} review · Records Assist{% endblock %}
+{% block screen %}review{% endblock %}
+{% block content %}
+{% include "_steps.html" %}
+{% set next_href = url_for('review_page', rid=req.id, rec=nxt.id) if nxt else url_for('signoff_page', rid=req.id) %}
+{% set next_label = ('Next email: ' ~ nxt.id ~ ' ' ~ (nxt.name | truncate(28, true, '…'))) if nxt else 'Continue to sign off' %}
+{{ wizard.guide('Choose Redact or Keep for each suggestion (or Redact all remaining), add anything missed with Redact text, then go to the next email.') }}
+
+<nav class="record-tabs" aria-label="Records to review" data-tip="review-tabs">
+  {% for r in checked %}
+    {% set left = r.suggestions | selectattr('decision', 'equalto', 'pending') | list | length %}
+    <a href="{{ url_for('review_page', rid=req.id, rec=r.id) }}" class="record-tab {{ 'is-active' if r.id == rec.id }}" {% if r.id == rec.id %}aria-current="page"{% endif %}>
+      <span class="strong">{{ r.id }}</span> <span class="clip">{{ r.name }}</span>
+      <span class="chip {{ 'chip-ok' if left == 0 else 'chip-warn' }}">{{ 'done' if left == 0 else left ~ ' left' }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+{# The redaction tools, in one bar across the top, as in Acrobat and the FOIA review tools #}
+<div class="redact-bar" role="toolbar" aria-label="Redaction tools">
+  <button type="button" class="btn btn-tool" id="redact-mode" data-tip="review-mode" aria-pressed="false">
+    <span aria-hidden="true">✎</span> Redact text
+  </button>
+  <button type="button" class="btn" id="undo" disabled title="Nothing to undo">
+    <span aria-hidden="true">↶</span> Undo
+  </button>
+  <div class="tool-group">
+    <label for="tool-category" class="small">Category</label>
+    <select id="tool-category" class="select-sm" data-tip="review-category">
+      {% for key in exemptions %}<option value="{{ key }}">{{ key }}</option>{% endfor %}
+    </select>
+  </div>
+  <span class="tool-sep" aria-hidden="true"></span>
+  <form class="tool-group find-form" id="add-form">
+    <label for="add-text" class="visually-hidden">Find a name or phrase</label>
+    <input id="add-text" data-tip="review-find" placeholder="Find a name or phrase" autocomplete="off">
+    <button class="btn btn-sm" type="submit">Redact all matches</button>
+  </form>
+</div>
+<p class="mode-hint" id="mode-hint" role="status" hidden>
+  <strong>Redact mode is on.</strong> Highlight words in either pane to hide them as the category above. Press <kbd>Esc</kbd> or click Redact text to stop.
+</p>
+
+<div class="review" id="review">
+  <section class="pane" aria-labelledby="orig-h">
+    <div class="pane-head">
+      <h3 id="orig-h" class="h4">Original <span class="muted small">(your working copy)</span></h3>
+      <span class="legend" aria-label="Key"><mark class="m-pending">to decide</mark><mark class="m-approve">redact</mark><mark class="m-reject">keep</mark></span>
+    </div>
+    <div class="pane-body record" id="pane-original" tabindex="0" data-tip="review-original"></div>
+  </section>
+  <section class="pane" aria-labelledby="prev-h">
+    <div class="pane-head">
+      <h3 id="prev-h" class="h4">Redacted preview <span class="muted small">(what the requester gets)</span></h3>
+      <span class="legend" aria-label="Key"><span class="redaction redaction-proposed">suggested</span><span class="redaction">confirmed</span></span>
+    </div>
+    <div class="pane-body record" id="pane-preview" tabindex="0" data-tip="review-preview"></div>
+    {# where reading the preview ends is where you decide to accept the rest #}
+    <div class="pane-foot">
+      <button type="button" class="btn btn-bulk" id="redact-all" data-tip="review-all">Redact all remaining</button>
+      <span class="muted small">Read it through? Accept the rest of the suggestions in one step.</span>
+    </div>
+  </section>
+  <section class="pane pane-list" aria-labelledby="sugg-h">
+    <div class="pane-head">
+      <h3 id="sugg-h" class="h4">Suggestions</h3>
+      <label class="visually-hidden" for="filter">Show</label>
+      <select id="filter" class="select-sm">
+        <option value="all">All</option>
+        <option value="pending">To decide</option>
+        <option value="both">Rig and Claude agree</option>
+        <option value="claude-only">Only Claude</option>
+        <option value="rig-only">Only the rig</option>
+        <option value="pattern">Fixed rules</option>
+        <option value="reviewer">Added by you</option>
+      </select>
+    </div>
+    <p class="muted small pane-sub" id="review-progress" aria-live="polite"></p>
+    {% if rec.notes or rec.errors %}
+    <details class="pane-notes">
+      <summary class="small">Notes from the models ({{ rec.notes | length + rec.errors | length }})</summary>
+      <ul class="list small">
+        {% for e in rec.errors %}<li class="error">{{ e }}</li>{% endfor %}
+        {% for n in rec.notes %}<li><span class="chip chip-{{ n.by }}">{{ models.get(n.by, n.by) }}</span> {{ n.text }}</li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    <ol class="sugg-list" id="sugg-list" data-tip="review-list"></ol>
+    <p class="hint small keys">Keys: <kbd>J</kbd>/<kbd>K</kbd> move, <kbd>A</kbd> redact, <kbd>R</kbd> keep, <kbd>U</kbd> undecide, <kbd>⌘Z</kbd> undo.</p>
+  </section>
+</div>
+
+{% call wizard.bar('Step 4 of 5 · Review · Email ' ~ position ~ ' of ' ~ (checked | length),
+                   url_for('review_page', rid=req.id, rec=prev.id) if prev else url_for('records_page', rid=req.id),
+                   'Previous email' if prev else 'Records') %}
+  <span class="muted small save-state" id="save-state" aria-live="polite">All changes saved.</span>
+  <a class="btn" id="wizard-next" href="{{ next_href }}" data-tip="review-next">{{ next_label }} →</a>
+{% endcall %}
+
+<script type="application/json" id="review-data">{{ {
+  "saveUrl": url_for('save_decisions', rid=req.id, rec_id=rec.id),
+  "text": rec.text,
+  "suggestions": rec.suggestions,
+  "exemptions": exemptions,
+  "models": models,
+  "locked": req.signed_off_at is not none
+} | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='review.js') }}"></script>{% endblock %}

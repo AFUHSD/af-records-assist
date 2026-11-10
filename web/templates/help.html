@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block title %}Help · Records Assist{% endblock %}
+{% block screen %}help{% endblock %}
+{% block content %}
+{# The explainer for a new tester. Same content as the Nov 9 guide artifact, now inside the app so it travels with it. #}
+<div class="help">
+<nav class="help-toc" aria-label="Sections">
+  <a href="#what">What it is</a>
+  <a href="#rules">Ground rules</a>
+  <a href="#parts">The parts</a>
+  <a href="#steps">The five steps</a>
+  <a href="#models">The two models</a>
+  <a href="#setup">Getting it running</a>
+  <a href="#walkthrough">Test walkthrough</a>
+  <a href="#checklist">Checklist</a>
+  <a href="#report">Reporting problems</a>
+  <a href="#notyet">Not built yet</a>
+</nav>
+
+<div class="help-body">
+<section id="what">
+  <div class="eyebrow">Agua Fria Union High School District · Prototype</div>
+  <h1>Records Assist, explained, and how to test it</h1>
+  <p class="help-lede">A helper for public records requests. It drafts the Google Vault search from a request, suggests redactions on the exported emails, and a named person approves every step before anything moves.</p>
+  <div class="help-chips">
+    <span class="chip">Python Flask web app</span>
+    <span class="chip">Runs on one Mac today</span>
+    <span class="chip">Fictional samples only</span>
+    <span class="chip">Updated 2026-11-09</span>
+  </div>
+  <div class="help-prose">
+    <p>A public records request arrives from a parent, a reporter or a lawyer. Someone has to work out what they really want, search the district's Google Workspace for matching emails and files, strip out anything the law says must stay private, and send the rest back. Two of those jobs take real judgment and real time: writing a search that finds everything responsive without drowning in noise, and spotting every student name, medical detail and attorney note in a pile of emails.</p>
+    <p>Records Assist puts an AI model on those two jobs as a <strong>first-draft assistant</strong>. It never runs the search itself, never touches Google Vault, and never releases a file. It proposes, a person decides.</p>
+    <p><strong>Lost on a screen?</strong> Turn on <strong>Show tips</strong> in the top bar. A numbered dot appears beside each control worth knowing; hover one for a sentence on what it does, or press <strong>Walk me through</strong> in the bar at the bottom to be shown them in order. It stays on until you turn it off.</p>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="eyebrow">Ground rules</div>
+  <h2>Four things to know before you click anything</h2>
+  <div class="help-cards">
+    <div class="help-note help-note-warn"><span class="dot"></span><p><strong>Fictional data only.</strong> Until the district decides where record content may go, every request and every email you put in must be made up. The samples built into the app are fictional. Never paste a real request, name or record.</p></div>
+    <div class="help-note help-note-info"><span class="dot"></span><p><strong>Everything is advisory.</strong> Each search plan and each redaction is a suggestion. Nothing is final until a person approves it and types their name on the sign-off page.</p></div>
+    <div class="help-note help-note-ok"><span class="dot"></span><p><strong>Nothing leaves the Mac except model calls.</strong> Requests, uploads and release files are saved in a local folder. The only outside traffic is the text you choose to send to a model.</p></div>
+    <div class="help-note help-note-danger"><span class="dot"></span><p><strong>Vault stays with Technology.</strong> The app writes search terms for a person to paste into Google Vault. It has no Vault connection and no one testing it needs Vault access.</p></div>
+  </div>
+</section>
+
+<section id="parts">
+  <div class="eyebrow">The parts</div>
+  <h2>Two layers, one place for the AI logic</h2>
+  <div class="help-prose">
+    <p>The repo has an <strong>engine</strong> and a <strong>web app</strong>. The engine is a command-line Python script that Luke Allpress built. It holds the two system prompts, the fixed redaction patterns, the Arizona exemption table and the code that talks to each model. The web app is a browser front end on top of it. It imports the engine rather than copying it, so when a prompt or a pattern changes in the engine, the web app uses the new one on its next start.</p>
+  </div>
+  <div class="card card-flush"><table class="table">
+    <thead><tr><th>Piece</th><th>What it does</th><th>Who owns it</th></tr></thead>
+    <tbody>
+      <tr><td>Engine</td><td>Two commands. <code>query</code> turns a request into a Vault search plan. <code>redact</code> runs the fixed rules, then asks a model for more spans. Also the home of the prompts, patterns and exemption table.</td><td>Luke Allpress</td></tr>
+      <tr><td>Web app</td><td>Five-step wizard in the browser: request, search plan, records, review, sign off. Saves each request as a folder on the Mac.</td><td>Mike Riley</td></tr>
+      <tr><td>Fixed rules</td><td>Pattern matching that always runs first: Social Security numbers, phone numbers, non-district emails, dates of birth, labelled IDs. No model involved.</td><td>Engine</td></tr>
+      <tr><td>Samples</td><td>One fictional request about a band trip, and six fictional emails planted with things that should be redacted, with an answer key.</td><td>Repo</td></tr>
+      <tr><td>Benchmark</td><td>Script that scores each model against the answer key. Run five times on Oct 27, 2026.</td><td>Repo</td></tr>
+      <tr><td>Saved data</td><td>One folder per request with the request JSON, the uploads as received, and the release files after sign-off. Ignored by git.</td><td>Local Mac</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="steps">
+  <div class="eyebrow">The five steps</div>
+  <h2>How a request moves through the app</h2>
+  <div class="help-prose"><p>The app is a wizard. Each page opens with one line saying what to do there. A bar pinned to the bottom shows Back, where you are, and the one next thing to do. The step bar at the top stays clickable so you can always jump back. Finishing a step moves you forward on its own.</p></div>
+  <div class="help-strip" aria-label="Steps">
+    <a href="#s1"><span class="n">Step 1</span><span class="nm">Request</span><span class="wh">Paste or upload it</span></a>
+    <a href="#s2"><span class="n">Step 2</span><span class="nm">Search plan</span><span class="wh">AI drafts, you decide</span></a>
+    <a href="#s3"><span class="n">Step 3</span><span class="nm">Records</span><span class="wh">Add the export, run the check</span></a>
+    <a href="#s4"><span class="n">Step 4</span><span class="nm">Review</span><span class="wh">Redact or keep, one by one</span></a>
+    <a href="#s5"><span class="n">Step 5</span><span class="nm">Sign off</span><span class="wh">Name, save, release</span></a>
+  </div>
+
+  <div class="help-step" id="s1">
+    <div class="card help-cards"><div>
+      <h3><span class="help-num">1</span>Request</h3>
+      <p>Where the request comes in. Paste the text, or upload the email it arrived in as a .eml or .txt file. Fill in who sent it and when, pick which model drafts the plan, and tick the box confirming the request is fictional.</p>
+      <dl class="help-kv">
+        <dt>Page</dt><dd>New request, from the home page's "New request" button</dd>
+        <dt>Shortcut</dt><dd>"Use the fictional sample request" fills in the band trip request with one click</dd>
+        <dt>Then</dt><dd>"Create and draft the search plan" takes 30 to 40 seconds while the model reads it</dd>
+      </dl>
+    </div></div>
+    <div class="card help-cards"><div>
+      <h3>Why it is built this way</h3>
+      <p>A request holds no student records, so either model can read it safely. The fictional confirmation is a deliberate speed bump so nobody pastes a real one in by habit while the district is still deciding where record content may go.</p>
+    </div></div>
+  </div>
+
+  <div class="help-step" id="s2">
+    <div class="card help-cards"><div>
+      <h3><span class="help-num">2</span>Search plan</h3>
+      <p>The AI reads the request and writes a plan: what is really being asked, what the request leaves open, who likely holds the records, a date range, and the exact Gmail and Drive search terms to paste into Google Vault. Then the page asks one question: <strong>is the request clear enough to build a good search?</strong> The AI suggests an answer. A person picks.</p>
+      <dl class="help-kv">
+        <dt>Yes</dt><dd>Shows the Vault terms with Copy buttons and a "Copy handoff for Technology" note. "Approve plan and continue" moves on.</dd>
+        <dt>No</dt><dd>Shows a ready-to-send email to the requester with the AI's questions written up, plus Copy and "Open in Gmail" buttons. Paste their reply underneath and the plan is drafted again with their answers.</dd>
+        <dt>Redraft</dt><dd>At the bottom, "Draft again with" lets you pick a different model and compare.</dd>
+      </dl>
+    </div></div>
+    <div class="card help-cards"><div>
+      <h3>Why it is built this way</h3>
+      <p>The model proposes the <strong>words</strong> of the search. The engine fixes the <strong>shape</strong>: one OR group of quoted phrases plus the date range, no AND, no exclusions, and any email address the requester did not write is removed. A small model will happily exclude the very word the request is about, and a search that is too narrow silently loses responsive records, which is the worse mistake. Accounts are chosen inside Vault by a person, never by the model.</p>
+    </div></div>
+  </div>
+
+  <div class="help-step" id="s3">
+    <div class="card help-cards"><div>
+      <h3><span class="help-num">3</span>Records</h3>
+      <p>Three numbered boxes on one page. First, record the Vault Count that Technology sends back. Saving it opens a cost estimate card: what the AI processing should cost (from the real token counts of calls made so far, or the calibrated sample numbers) plus the $1-per-page policy charge, with a ready-to-send email asking the requester to proceed, narrow, or withdraw. Mark it sent, then record their answer. Second, upload the Vault export as .mbox, .eml or .txt, or paste one email. Third, choose the rig, Claude, or both, and run the redaction check.</p>
+      <dl class="help-kv">
+        <dt>Shortcut</dt><dd>"Add the 6 fictional sample emails instead" loads the benchmark emails without any upload</dd>
+        <dt>Per record</dt><dd>Each row shows "Not checked" or the number of suggestions and which model found them, with Check and Remove buttons</dd>
+        <dt>Then</dt><dd>When the last check finishes, the review opens on its own</dd>
+      </dl>
+    </div></div>
+    <div class="card help-cards"><div>
+      <h3>Why it is built this way</h3>
+      <p>The fixed rules always run first and the model sees text with those patterns already masked, exactly as on the command line. Checking with both models shows them side by side on the review screen, which is how the Oct 27 benchmark was read. Uploads are kept exactly as received so there is always an untouched original.</p>
+    </div></div>
+  </div>
+
+  <div class="help-step" id="s4">
+    <div class="card help-cards"><div>
+      <h3><span class="help-num">4</span>Review</h3>
+      <p>Laid out like Acrobat and the FOIA review tools. One toolbar across the top. Below it, the original on the left with every suggestion highlighted but still readable, and the redacted preview on the right showing what the requester would get. Under the preview, a list of every suggestion with who found it and why.</p>
+      <dl class="help-kv">
+        <dt>Each suggestion</dt><dd>Redact or Keep. "Redact all remaining" accepts whatever is still undecided.</dd>
+        <dt>Missed something</dt><dd>Turn on "Redact text", pick a category, and highlight words in either pane. <kbd>Esc</kbd> turns it off.</dd>
+        <dt>Many copies of a name</dt><dd>Type it in "Find a name or phrase" and press "Redact all matches"</dd>
+        <dt>Filter</dt><dd>All · To decide · Rig and Claude agree · Only Claude · Only the rig · Fixed rules · Added by you</dd>
+        <dt>Keys</dt><dd><kbd>J</kbd> <kbd>K</kbd> move · <kbd>A</kbd> redact · <kbd>R</kbd> keep · <kbd>U</kbd> undecide · <kbd>⌘Z</kbd> undo</dd>
+        <dt>Saving</dt><dd>Every click saves. The bottom bar says "All changes saved."</dd>
+      </dl>
+      <p class="help-legend">How the two panes read: <span class="help-m-pending">a yellow mark</span> is a suggestion not yet decided, <span class="help-m-approve">a pink mark</span> is one you confirmed. In the preview, <span class="help-bar-soft">a gray bar</span> is undecided, <span class="help-bar">a black bar</span> is confirmed, and plain text is something you chose to keep.</p>
+    </div></div>
+    <div class="card help-cards"><div>
+      <h3>Why it is built this way</h3>
+      <p>The command-line engine replaces text as it goes. The web app instead keeps <strong>where</strong> each span sits in the record so it can be highlighted, approved or rejected one at a time, and the release file applies only the approved ones. A span a model returns that the app cannot find word for word in the record is dropped and noted, so nothing is redacted that was never there. Exemption labels on each suggestion are candidates for counsel, not determinations.</p>
+    </div></div>
+  </div>
+
+  <div class="help-step" id="s5">
+    <div class="card help-cards"><div>
+      <h3><span class="help-num">5</span>Sign off</h3>
+      <p>A summary of the whole request: records, redactions approved, suggestions kept visible, anything still to decide, and the Vault count. Type a reviewer name and press "Sign off and save the release."</p>
+      <dl class="help-kv">
+        <dt>Blocked until</dt><dd>Every record has been checked and every suggestion has a decision</dd>
+        <dt>Saves</dt><dd>One redacted .txt per email marked for release, plus one internal decision log marked "internal, do not release"</dd>
+        <dt>Afterward</dt><dd>Download links for each file, and "Reopen for changes" if something was missed</dd>
+      </dl>
+    </div></div>
+    <div class="card help-cards"><div>
+      <h3>Why it is built this way</h3>
+      <p>The named reviewer is the point of the whole tool. The decision log records who kept and who redacted what, with the model's reasoning beside it, so a later question from counsel or the requester has an answer. Email notice to the requester is not built yet because it needs the district mail relay, which comes with hosting.</p>
+    </div></div>
+  </div>
+</section>
+
+<section id="models">
+  <div class="eyebrow">The two models</div>
+  <h2>The rig and Claude, and when each is used</h2>
+  <div class="help-prose"><p>The top bar shows which models are ready right now. A model that is offline is greyed out wherever you would choose it.</p></div>
+  <div class="card card-flush"><table class="table">
+    <thead><tr><th>Model</th><th>What it is</th><th>Works from</th><th>Benchmark, Oct 27</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip chip-rig">Rig</span></td><td>The district's own self-hosted language model. Record content stays inside the district network.</td><td>The office network only. The VPN does not reach it today.</td><td>Caught 66% of planted items. Missed attorney advice, employee medical details and special education status every time.</td></tr>
+      <tr><td><span class="chip chip-claude">Claude</span></td><td>Anthropic's hosted model through the official SDK. The app prints a note when record content goes to it.</td><td>Anywhere with internet, if the API key is in the Mac's Keychain.</td><td>Caught 99% of planted items.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="help-prose">
+    <p>The district's ruling of 2026-10-23: the self-hosted model is <strong>preferred, not required</strong>, for anything that reads student records. So the app defaults to the rig for redaction, and either model is fine for the search plan since a request holds no records. Which model should read real record content is still an open decision, and the benchmark numbers above are the evidence for that conversation.</p>
+    <p>The benchmark also showed the fixed rules hiding things they should not: the district's own public office phone numbers and known vendor email addresses. A reviewer has to Keep those by hand for now. Watch for it during testing.</p>
+  </div>
+</section>
+
+<section id="setup">
+  <div class="eyebrow">Getting it running</div>
+  <h2>Two ways to see it</h2>
+  <div class="help-cards">
+    <div class="card">
+      <h3>Click-through demo, no setup</h3>
+      <p>A saved walkthrough with fictional answers already filled in, published as a Claude artifact on Oct 29. Good for seeing the screens and the flow. Nothing in it calls a model or saves anything.</p>
+      <p><a href="https://claude.ai/artifact/Pj3AbUBHidCMaWeqhWkf7v">Open the demo</a></p>
+    </div>
+    <div class="card">
+      <h3>The real app, on the Mac it runs on</h3>
+      <p>The app listens only on that computer, so testing the live version means sitting at it or screen-sharing. From the project folder:</p>
+      <pre><code>./run-web.sh</code></pre>
+      <p>Then open <code>http://localhost:8000</code>. Ctrl+C in Terminal stops it. The script loads the Claude key from the Keychain. If no key is found it says so and starts with the rig only. To use the rig you must be on the district network.</p>
+    </div>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="eyebrow">Test walkthrough</div>
+  <h2>One fictional request, start to finish</h2>
+  <div class="help-prose"><p>This is the path to take the first time. It uses only the built-in samples and takes about fifteen minutes with Claude. Expect two waits of 30 to 40 seconds for the search plan and one per email for the redaction check. Write down anything that surprises you, even if it is not clearly a bug.</p></div>
+  <div class="card"><ol>
+    <li><strong>Start.</strong> Open the home page. It lists existing requests with a status, or says "No requests yet." Press "New request."</li>
+    <li><strong>Fill the request.</strong> Press "Use the fictional sample request." The band trip request appears, asking for emails about moving a spring band trip from Anaheim to Flagstaff, the cost comparison shown to the board, and parent complaints. Enter a made-up name and email, keep today's date, choose Claude, tick the fictional box, and press "Create and draft the search plan."</li>
+    <li><strong>Read the plan.</strong> You should land on Step 2 with a new request number. Check that the summary matches the request, that the date range starts around the 2025-26 school year, and that the Gmail terms are one OR group of quoted phrases with no AND and no minus signs.</li>
+    <li><strong>Answer the question.</strong> The AI will probably suggest asking first, since the request leaves things open such as which text messages and what counts as the district office. Press "No, ask the requester first." Read the email. It should greet them properly, cite the request number and date, and number its questions. Try Copy message.</li>
+    <li><strong>Paste a reply.</strong> In "When they answer," paste a short made-up answer such as "Emails only, no texts. District office means the superintendent and CFO. Through October 2025 is fine." Press "Add their answer and redraft." The plan should come back narrower and the reply should appear under the request.</li>
+    <li><strong>Approve.</strong> Press "Yes, build the search." Try the Copy buttons and "Copy handoff for Technology." Then "Approve plan and continue." You should land on Step 3.</li>
+    <li><strong>Record the count.</strong> In box 1, type a Vault Count such as 340 and a note, press Save. A "Cost estimate for the requester" card appears with the AI cost, the page charge, and the email. Press "Mark as sent", then "Requester said proceed". In box 2, press "Add the 6 fictional sample emails instead." Six rows should appear in box 3, all "Not checked."</li>
+    <li><strong>Run the check.</strong> Choose "Both" if you are on the district network, otherwise Claude. Press "Run the redaction check (6)." Each row should update to a suggestion count. When the last one finishes the review opens on its own.</li>
+    <li><strong>Review the first email.</strong> Confirm the left pane shows yellow marks and the right pane shows gray bars in the same places. Press <kbd>J</kbd> a few times to move, <kbd>A</kbd> to redact one, <kbd>R</kbd> to keep one. Watch the preview change and the bottom bar say "All changes saved." Reload the page: the decisions must still be there.</li>
+    <li><strong>Add one by hand.</strong> Turn on "Redact text," pick a category, and highlight a word in the original. It should appear in the list as "Added by you." Press <kbd>Esc</kbd>. Try "Find a name or phrase" with a name from the email and "Redact all matches."</li>
+    <li><strong>Keep something the rules got wrong.</strong> Look for a district office phone number or a vendor email that the fixed rules hid. Press Keep on it. This is a known gap, so note whether you found one and where.</li>
+    <li><strong>Finish the rest.</strong> Press "Redact all remaining," then the green "Next email" button. Do the same for the remaining five. On the last one the button reads "Continue to sign off."</li>
+    <li><strong>Sign off.</strong> Check the summary numbers add up to what you decided. Leave the name blank and press sign off: it should refuse. Type a name and press "Sign off and save the release." You should see six files for release and one marked internal.</li>
+    <li><strong>Check the output.</strong> Download one released file and read it. Every approved redaction should be hidden and nothing you kept should be. Open the internal log and confirm it names you and lists every decision.</li>
+    <li><strong>Reopen.</strong> Press "Reopen for changes," change one decision, sign off again, and confirm the released file changed.</li>
+  </ol></div>
+  <div class="help-note help-note-info"><span class="dot"></span><p><strong>Things worth trying to break.</strong> Upload a .txt that is not an email. Paste an empty reply. Press Back in the browser during the 30-second wait. Open the same request in two tabs and decide in both. Remove a record after it was checked. Create a request without ticking the fictional box.</p></div>
+</section>
+
+<section id="checklist">
+  <div class="eyebrow">Checklist</div>
+  <h2>What a pass looks like</h2>
+  <div class="help-prose"><p>Tick each item as you confirm it. Ticks are saved in this browser only, so they will be here when you come back on the same computer but no one else sees them. Send your notes separately.</p></div>
+  <div class="card card-flush help-check" id="help-checklist" data-tip="help-checklist">
+    <div class="help-check-head">
+      <span class="muted" id="help-check-count">0 of 0 checked</span>
+      <button type="button" class="btn btn-sm" id="help-check-reset">Clear all</button>
+    </div>
+    <div class="help-check-group">
+      <h3>Request and plan</h3>
+      <label><input type="checkbox" id="hc01"><span>Sample request fills in with one click<span class="expect">Expect: the band trip text in the box, no edits needed</span></span></label>
+      <label><input type="checkbox" id="hc02"><span>Creating without the fictional box is refused<span class="expect">Expect: a message, no request created</span></span></label>
+      <label><input type="checkbox" id="hc03"><span>Search plan drafts in 30 to 40 seconds and lands on Step 2<span class="expect">Expect: a new request number in the header</span></span></label>
+      <label><input type="checkbox" id="hc04"><span>Gmail terms are one OR group of quoted phrases<span class="expect">Expect: no AND, no minus signs, no email addresses the requester did not write</span></span></label>
+      <label><input type="checkbox" id="hc05"><span>"No, ask the requester first" shows a sendable email<span class="expect">Expect: greeting, request number, date received, numbered questions</span></span></label>
+      <label><input type="checkbox" id="hc06"><span>Pasting a reply redrafts the plan and keeps the reply visible</span></label>
+      <label><input type="checkbox" id="hc07"><span>Copy buttons and "Copy handoff for Technology" put the right text on the clipboard</span></label>
+      <label><input type="checkbox" id="hc08"><span>Approving the plan opens Records and marks Step 2 with a check</span></label>
+    </div>
+    <div class="help-check-group">
+      <h3>Records and check</h3>
+      <label><input type="checkbox" id="hc09"><span>Vault Count and note save and survive a reload</span></label>
+      <label><input type="checkbox" id="hc09b"><span>The cost estimate card appears after the count is saved, and "AI cost so far" in the header grows as records are checked</span></label>
+      <label><input type="checkbox" id="hc10"><span>"Add the 6 fictional sample emails" adds six rows marked Not checked</span></label>
+      <label><input type="checkbox" id="hc11"><span>Uploading a .txt or .eml adds a row; uploading junk gives a clear error</span></label>
+      <label><input type="checkbox" id="hc12"><span>Offline model is greyed out and cannot be chosen</span></label>
+      <label><input type="checkbox" id="hc13"><span>Each row updates with a suggestion count and the model name as checks finish</span></label>
+      <label><input type="checkbox" id="hc14"><span>Review opens on its own after the last check</span></label>
+    </div>
+    <div class="help-check-group">
+      <h3>Review</h3>
+      <label><input type="checkbox" id="hc15"><span>Highlights in the original line up with bars in the preview</span></label>
+      <label><input type="checkbox" id="hc16"><span>Keys J, K, A, R, U and ⌘Z do what the footer says</span></label>
+      <label><input type="checkbox" id="hc17"><span>Decisions survive a page reload<span class="expect">Expect: same marks, same counts, "All changes saved"</span></span></label>
+      <label><input type="checkbox" id="hc18"><span>Redact text mode adds a suggestion marked "Added by you" and Esc turns it off</span></label>
+      <label><input type="checkbox" id="hc19"><span>Find a phrase and "Redact all matches" catches every copy</span></label>
+      <label><input type="checkbox" id="hc20"><span>Filter chips show only what they say</span></label>
+      <label><input type="checkbox" id="hc21"><span>With both models, agree / only Claude / only the rig labels are right</span></label>
+      <label><input type="checkbox" id="hc22"><span>Known gap: a district phone number or vendor email was hidden by the fixed rules<span class="expect">Note which email and which item, then Keep it</span></span></label>
+      <label><input type="checkbox" id="hc23"><span>"Redact all remaining" decides only what was still pending</span></label>
+      <label><input type="checkbox" id="hc24"><span>Last email's button reads "Continue to sign off"</span></label>
+    </div>
+    <div class="help-check-group">
+      <h3>Sign off and output</h3>
+      <label><input type="checkbox" id="hc25"><span>Sign off is blocked while anything is unchecked or undecided</span></label>
+      <label><input type="checkbox" id="hc26"><span>Empty reviewer name is refused</span></label>
+      <label><input type="checkbox" id="hc27"><span>Six released files plus one internal log appear with download links</span></label>
+      <label><input type="checkbox" id="hc28"><span>Released file hides every approved redaction and nothing you kept</span></label>
+      <label><input type="checkbox" id="hc29"><span>Internal log names the reviewer and lists every decision</span></label>
+      <label><input type="checkbox" id="hc30"><span>Reopen, change a decision, sign off again: the released file changes</span></label>
+      <label><input type="checkbox" id="hc31"><span>Home page shows the request with a Finished status</span></label>
+    </div>
+  </div>
+</section>
+
+<section id="report">
+  <div class="eyebrow">Reporting problems</div>
+  <h2>How to say what you found</h2>
+  <div class="help-cards">
+    <div class="card">
+      <h3>On the page itself</h3>
+      <p>Every page of the app has a <strong>Feedback</strong> button from the district Site Feedback layer. Press it, click the part of the page you mean, and type what should change. Comments collect on the project's card at the district feedback board. This is the quickest way and it records exactly where you were.</p>
+    </div>
+    <div class="card">
+      <h3>What makes a note useful</h3>
+      <ul>
+        <li>The request number and which step</li>
+        <li>Which model you had chosen</li>
+        <li>What you expected and what happened instead</li>
+        <li>For a redaction miss or a wrong redaction: which sample email and the exact words</li>
+        <li>For something slow: roughly how long it took</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="notyet">
+  <div class="eyebrow">Not built yet</div>
+  <h2>What is missing on purpose, so you do not test for it</h2>
+  <div class="card card-flush"><table class="table">
+    <thead><tr><th>Area</th><th>Status</th><th>What that means for testing</th></tr></thead>
+    <tbody>
+      <tr><td>Hosting</td><td><span class="chip">Not started</span></td><td>Runs only on one Mac. Where it will live is an open decision.</td></tr>
+      <tr><td>Sign-in</td><td><span class="chip">Not started</span></td><td>No accounts or roles. Fine for now because nothing but that Mac can reach it.</td></tr>
+      <tr><td>Vault connection</td><td><span class="chip">Not started</span></td><td>Search, count and export are done by Technology by hand. The app only writes the terms.</td></tr>
+      <tr><td>Export reading</td><td><span class="chip chip-warn">Partly</span></td><td>Reads .mbox, .eml and .txt. No PDF or attachment text yet.</td></tr>
+      <tr><td>Email on sign-off</td><td><span class="chip chip-warn">Partly</span></td><td>Files are saved. No notice goes to anyone. Waits for the district mail relay.</td></tr>
+      <tr><td>PDF burn-in</td><td><span class="chip">Not started</span></td><td>Release files are plain text, not PDFs with black boxes.</td></tr>
+      <tr><td>Payment</td><td><span class="chip">Not started</span></td><td>The estimate email has a placeholder for how to pay; the business office has to say how they take payment, and a final invoice email is not drafted yet.</td></tr>
+      <tr><td>Allow list for district numbers</td><td><span class="chip">Not started</span></td><td>Fixed rules still hide public office phones and vendor emails. Keep them by hand.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="help-foot">Project owners: Luke Allpress and Mike Riley, Agua Fria Union High School District. The engine and the redaction pipeline follow Peninsula School District's public records recipe in the Agentic Builders cookbook. Arizona context in the prompts: A.R.S. 39-121 for prompt production, FERPA and A.R.S. 15-141 for student records.</p>
+</section>
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// The checklist remembers ticks in this browser only (localStorage), so a tester can leave and come back.
+(function () {
+  var KEY = 'records-assist-help-checks-v1';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('#help-checklist input[type=checkbox]'));
+  var count = document.getElementById('help-check-count');
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function store(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* storage blocked: ticks still work for this view */ } }
+  function update() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    count.textContent = n + ' of ' + boxes.length + ' checked';
+  }
+  var saved = load();
+  boxes.forEach(function (b) {
+    if (saved[b.id]) b.checked = true;
+    b.addEventListener('change', function () { var s = load(); s[b.id] = b.checked; store(s); update(); });
+  });
+  document.getElementById('help-check-reset').addEventListener('click', function () {
+    boxes.forEach(function (b) { b.checked = false; });
+    store({}); update();
+  });
+  update();
+})();
+</script>
+{% endblock %}

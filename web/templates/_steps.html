@@ -1,0 +1,40 @@
+{# The header and step bar shared by every page of one request. Expects `req` and `step`. #}
+{% set label, current = status(req) %}
+{% set pending = req.records | map(attribute='suggestions') | sum(start=[]) | selectattr('decision', 'equalto', 'pending') | list | length %}
+{% set done = {
+  'plan': req.plan_approved_at is not none,
+  'records': req.records and (req.records | rejectattr('checked_at') | list | length == 0),
+  'review': req.records and (req.records | rejectattr('checked_at') | list | length == 0) and pending == 0,
+  'signoff': req.signed_off_at is not none,
+} %}
+{% set headline = req.plan.summary if req.plan else req.request_text[:90] ~ '…' %}
+<div class="req-head {{ 'req-head-compact' if step == 'review' }}">
+  <div>
+    <p class="eyebrow">{{ req.id }} · received {{ req.received }}</p>
+    <h1 title="{{ headline }}">{{ headline }}</h1>
+    <p class="muted">
+      {{ req.requester.name or 'Requester not given' }}{% if req.requester.contact %} · {{ req.requester.contact }}{% endif %}
+    </p>
+  </div>
+  <div class="req-chips">
+    {% set t = usage_totals(req.usage or []) %}
+    <span class="chip chip-cost" data-tip="cost-chip" title="{{ t.calls }} model call{{ 's' if t.calls != 1 }}: {{ '{:,}'.format(t.input_tokens) }} tokens in, {{ '{:,}'.format(t.output_tokens) }} out.{% for k, b in t.by_step.items() %} {{ step_names[k] }} ${{ '%.2f' % b.cost_usd }}.{% endfor %} Real token counts from each model's reply, at Anthropic list price; the rig is free.">
+      AI cost so far <strong>${{ '%.2f' % t.total_usd }}</strong>
+    </span>
+    <span class="chip chip-status {{ 'chip-done' if label == 'Done' else '' }}">{{ label }}</span>
+  </div>
+</div>
+
+<nav class="steps" aria-label="Steps for this request">
+  <ol>
+    <li class="step is-done"><span class="step-num" aria-hidden="true">✓</span><span>Request</span></li>
+    {% for key, name in [('plan', 'Search plan'), ('records', 'Records'), ('review', 'Review'), ('signoff', 'Sign off')] %}
+      <li class="step {{ 'is-current' if step == key }} {{ 'is-done' if done[key] }}">
+        <a href="{{ url_for(key ~ '_page', rid=req.id) }}" {% if step == key %}aria-current="step"{% endif %}>
+          <span class="step-num" aria-hidden="true">{{ '✓' if done[key] else loop.index + 1 }}</span>
+          <span>{{ name }}</span>
+        </a>
+      </li>
+    {% endfor %}
+  </ol>
+</nav>

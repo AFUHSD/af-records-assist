@@ -1,0 +1,15 @@
+{# The wizard bar pinned to the bottom of every step: Back on the left, where you are in the middle, and the one next
+   thing to do on the right (passed in as the call block). #}
+{% macro bar(position, back_href=None, back_label='Back', hint='') %}
+<div class="wizard-bar" role="region" aria-label="Step navigation">
+  {% if back_href %}<a class="btn btn-ghost" href="{{ back_href }}">← {{ back_label }}</a>{% else %}<span></span>{% endif %}
+  <div class="wizard-where">
+    <strong>{{ position }}</strong>
+    <span class="muted small" id="wizard-hint" aria-live="polite">{{ hint }}</span>
+  </div>
+  <div class="wizard-next">{{ caller() }}</div>
+</div>
+{% endmacro %}
+
+{# One plain sentence at the top of a step saying what to do there. #}
+{% macro guide(text) %}<p class="guide"><strong>What to do here:</strong> {{ text }}</p>{% endmacro %}

@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% import "_wizard.html" as wizard %}
+{% block title %}{{ req.id }} search plan · Records Assist{% endblock %}
+{% block screen %}plan-{{ 'approved' if req.plan_approved_at else (req.plan_choice or ('open' if req.plan else 'none')) }}{% endblock %}
+{% block content %}
+{% include "_steps.html" %}
+{% set p = req.plan %}
+{# Step 2 asks one question first: is the request clear enough to build a good search? A person answers it and the
+   page follows the answer: yes shows the Vault search, no shows the email to the requester. The model only suggests. #}
+{% set choice = 'search' if req.plan_approved_at else req.plan_choice %}
+{% set open_points = (p.questions_for_requester or []) if p else [] %}
+{% if not p %}{{ wizard.guide('The search plan has not been drafted yet. Choose a model at the bottom of the page and draft it.') }}
+{% elif choice == 'search' %}{{ wizard.guide('Check the Vault search. When it looks right, approve it and send it to Technology.') }}
+{% elif choice == 'ask' %}{{ wizard.guide('Send the requester the email. When they answer, paste their reply next to it and the plan is drafted again with their answers.') }}
+{% else %}{{ wizard.guide('Read what is being asked, then decide: is it clear enough to build a good search, or should we ask the requester first?') }}{% endif %}
+
+<details class="card card-quiet">
+  <summary data-tip="plan-request">The request as received{% if req.replies %}, and {{ req.replies | length }} {{ 'answer' if req.replies | length == 1 else 'answers' }} from the requester{% endif %}</summary>
+  <pre class="record">{{ req.request_text }}</pre>
+  {% for r in req.replies or [] %}
+    <p class="eyebrow reply-label">The requester's answer · {{ r.at | when }}</p>
+    <pre class="record">{{ r.text }}</pre>
+  {% endfor %}
+</details>
+
+{% if req.plan_error %}
+  <div class="flash flash-error" role="alert">The search plan could not be drafted: {{ req.plan_error }}</div>
+{% endif %}
+
+{% if p %}
+<section class="card stack">
+  <h2 class="h3">What is being asked</h2>
+  <p>{{ p.summary }}</p>
+  {% if p.really_asking %}<p class="muted"><strong>Underlying need:</strong> {{ p.really_asking }}</p>{% endif %}
+</section>
+
+<section class="card stack decide" id="decide">
+  <h2 class="h3">Do we have enough to build a good search?</h2>
+  {% if open_points %}
+    <p class="ai-take ai-take-ask">The AI suggests asking first. It found {{ open_points | length }} {{ 'question' if open_points | length == 1 else 'questions' }} worth settling before searching.</p>
+  {% else %}
+    <p class="ai-take ai-take-ok">The AI thinks the request is clear enough to search.</p>
+  {% endif %}
+  {% if p.ambiguities %}
+    <details>
+      <summary>What the request leaves open ({{ p.ambiguities | length }})</summary>
+      <ul class="list">{% for a in p.ambiguities %}<li>{{ a }}</li>{% endfor %}</ul>
+    </details>
+  {% endif %}
+  <form method="post" action="{{ url_for('plan_choose', rid=req.id) }}" class="choices" aria-label="Your answer">
+    <button class="choice {{ 'is-on' if choice == 'search' }}" type="submit" name="choice" value="search" data-tip="plan-yes" aria-pressed="{{ 'true' if choice == 'search' else 'false' }}">
+      <span class="choice-mark" aria-hidden="true"></span>
+      <span><span class="choice-title">Yes, build the search</span><span class="choice-sub">Show the Google Vault search to send to Technology</span></span>
+    </button>
+    <button class="choice {{ 'is-on' if choice == 'ask' }}" type="submit" name="choice" value="ask" data-tip="plan-no" aria-pressed="{{ 'true' if choice == 'ask' else 'false' }}">
+      <span class="choice-mark" aria-hidden="true"></span>
+      <span><span class="choice-title">No, ask the requester first</span><span class="choice-sub">Show the email to send them</span></span>
+    </button>
+  </form>
+</section>
+
+{% if choice == 'search' %}
+<section class="card stack vault-card">
+  <div class="label-row">
+    <h2 class="h3">Paste into Google Vault</h2>
+    <button type="button" class="btn btn-sm" data-copy="#handoff" data-tip="plan-handoff">Copy handoff for Technology</button>
+  </div>
+  <p class="muted">Vault → Matters → new matter named <strong>{{ req.id }}</strong> → Search. Choose the service, accounts and dates below, paste the terms, and run <strong>Count</strong> before <strong>Export</strong>.</p>
+  <p class="error" data-tip="plan-mbox"><strong>Export format: .mbox, not PST.</strong> Vault offers both. This app can only read .mbox; a PST export cannot be loaded and the export would have to be run again.</p>
+  <div class="terms">
+    <div class="terms-row">
+      <span class="terms-label">Gmail terms</span>
+      <code id="gmail-terms">{{ p.gmail_terms or '(none proposed)' }}</code>
+      <button type="button" class="btn btn-sm" data-copy="#gmail-terms">Copy</button>
+    </div>
+    <div class="terms-row">
+      <span class="terms-label">Drive terms</span>
+      <code id="drive-terms">{{ p.drive_terms or '(none proposed)' }}</code>
+      <button type="button" class="btn btn-sm" data-copy="#drive-terms">Copy</button>
+    </div>
+  </div>
+  <dl class="facts">
+    <div><dt>Date range</dt><dd>{{ (p.date_range or {}).start or 'open' }} to {{ (p.date_range or {}).end or 'open' }}<span class="muted"> · {{ (p.date_range or {}).basis }}</span></dd></div>
+    <div><dt>Scope in Vault</dt><dd>{{ p.scope }}</dd></div>
+    <div><dt>Likely record holders</dt><dd>{{ (p.custodians or []) | join('; ') }}</dd></div>
+  </dl>
+</section>
+
+<div class="grid-2">
+  <section class="card stack">
+    <h2 class="h3">Exemptions likely to come up</h2>
+    {% if p.likely_exemptions %}
+      <ul class="list">
+        {% for e in p.likely_exemptions %}<li><span class="chip">{{ e }}</span> {{ exemptions.get(e, 'See counsel.') }}</li>{% endfor %}
+      </ul>
+    {% else %}<p class="muted">None flagged.</p>{% endif %}
+  </section>
+  <section class="card stack">
+    <h2 class="h3">Notes for the records officer</h2>
+    {% if p.notes %}<ul class="list">{% for n in p.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% else %}<p class="muted">None.</p>{% endif %}
+  </section>
+</div>
+
+<pre id="handoff" class="visually-hidden">Records request {{ req.id }}: Vault search
+
+Please open a Vault matter named {{ req.id }}, run Count, then export.
+
+Gmail terms:
+{{ p.gmail_terms }}
+
+Drive terms:
+{{ p.drive_terms }}
+
+Date range: {{ (p.date_range or {}).start or 'open' }} to {{ (p.date_range or {}).end or 'open' }}
+Scope: {{ p.scope }}
+Likely record holders: {{ (p.custodians or []) | join('; ') }}
+
+EXPORT FORMAT: .mbox (not PST). The records tool cannot read PST, so a PST export would have to be redone.
+
+Please send back the Count and the .mbox export.</pre>
+{% elif choice == 'ask' %}
+<div class="grid-2">
+  {# The model's questions, written up as the email itself: greeting, request number, the questions, a sign-off. #}
+  <section class="card stack">
+    <div class="label-row">
+      <h2 class="h3">Email to the requester</h2>
+      {% if p.questions_for_requester %}
+        {% set contact = req.requester.contact or '' %}
+        <div class="row">
+          <button type="button" class="btn btn-sm" data-copy="#email-body">Copy message</button>
+          <button type="button" class="btn btn-sm btn-primary" data-tip="plan-gmail" data-gmail data-to="{{ contact if '@' in contact else '' }}"
+                  data-subject="#email-subject" data-body="#email-body">Open in Gmail</button>
+        </div>
+      {% endif %}
+    </div>
+    {% if p.questions_for_requester %}
+{% set months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] %}
+{% set ymd = (req.received or '').split('-') %}
+{% set received = months[ymd[1]|int - 1] ~ ' ' ~ (ymd[2]|int) ~ ', ' ~ ymd[0] if ymd|length == 3 else req.received %}
+{% set name = (req.requester.name or '')|trim %}
+{# "A parent" describes someone; it is not a name to greet them by #}
+{% set greeting = 'Hello ' ~ name ~ ',' if name and not name.lower().startswith(('a ', 'an ', 'the ')) else 'Hello,' %}
+{% set email_body %}{{ greeting }}
+
+Thank you for your public records request, which we received on {{ received }}. Its reference number is {{ req.id }}. Please include it if you write back.
+
+To make sure we search for the right records and get them to you as quickly as we can, could you help with a few questions?
+{% for q in p.questions_for_requester %}
+{{ loop.index }}. {{ q }}
+{%- endfor %}
+
+You can answer by replying to this email. If it's easier to talk it through, just let me know.
+
+Thank you,
+
+[Your name]
+[Your title]
+Agua Fria Union High School District{% endset %}
+      <p class="muted small">The AI's questions for the requester, written up as an email. Edit anything before you send it. Edits here aren't saved, so send or copy it when it reads right.</p>
+      <div class="field">
+        <label for="email-subject">Subject</label>
+        <input id="email-subject" value="Your public records request {{ req.id }}: a few questions">
+      </div>
+      <div class="field">
+        <label for="email-body">Message</label>
+        <textarea id="email-body" rows="18">{{ email_body }}</textarea>
+      </div>
+    {% else %}
+      <p class="muted">No questions needed. The request is clear enough to search.</p>
+    {% endif %}
+  </section>
+
+  <section class="card stack">
+    <h2 class="h3">When they answer</h2>
+    <p class="muted">Paste the requester's reply here. The plan is drafted again with their answers, and you decide again whether it's clear enough to search.</p>
+    <form method="post" action="{{ url_for('plan_reply', rid=req.id) }}" class="stack"
+          data-wait="Reading the requester's answer and drafting a new search plan. This usually takes 30 to 40 seconds.">
+      <div class="field">
+        <label for="reply">The requester's reply</label>
+        <textarea id="reply" name="reply" data-tip="plan-reply" rows="12" required placeholder="Paste their email here."></textarea>
+      </div>
+      <div class="row">
+        <label for="reply-model" class="muted nowrap">Draft with</label>
+        <select id="reply-model" name="model" class="select-sm">
+          {% for key, label in models.items() %}
+            <option value="{{ key }}" {% if p._model == key %}selected{% endif %} {% if model_status[key] %}disabled{% endif %}>{{ label }}{% if model_status[key] %} (offline){% endif %}</option>
+          {% endfor %}
+        </select>
+        <button class="btn btn-primary" type="submit">Add their answer and redraft</button>
+      </div>
+    </form>
+  </section>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="actionbar">
+  <form method="post" action="{{ url_for('plan_redraft', rid=req.id) }}" class="inline-form"
+        data-wait="Drafting a new search plan. This usually takes 30 to 40 seconds.">
+    <label for="redraft-model" class="muted">{{ 'Draft again with' if p else 'Draft with' }}</label>
+    <select id="redraft-model" name="model" data-tip="plan-model">
+      {% for key, label in models.items() %}
+        <option value="{{ key }}" {% if p and p._model == key or (not p and key == 'claude') %}selected{% endif %} {% if model_status[key] %}disabled{% endif %}>{{ label }}{% if model_status[key] %} (offline){% endif %}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" type="submit">{{ 'Redraft' if p else 'Draft the plan' }}</button>
+  </form>
+  {% if p %}<p class="muted small">Drafted by {{ models.get(p._model, p._model) }} {{ p._at | when }}.</p>{% endif %}
+</div>
+
+{% set hint = 'Approved' if req.plan_approved_at else ('No plan yet' if not p else
+              ('Waiting for your approval' if choice == 'search' else
+              ("Waiting on the requester's answer" if choice == 'ask' else 'Answer the question above first'))) %}
+{% call wizard.bar('Step 2 of 5 · Search plan', url_for('home'), 'All requests', hint) %}
+  {% if req.plan_approved_at %}
+    <a class="btn btn-primary" href="{{ url_for('records_page', rid=req.id) }}" data-tip="plan-continue">Continue to records →</a>
+  {% elif p and choice == 'search' %}
+    <form method="post" action="{{ url_for('plan_approve', rid=req.id) }}">
+      <button class="btn btn-primary" type="submit" data-tip="plan-approve">Approve plan and continue →</button>
+    </form>
+  {% else %}
+    <button class="btn btn-primary" type="button" disabled>Approve plan and continue →</button>
+  {% endif %}
+{% endcall %}
+{% endblock %}
