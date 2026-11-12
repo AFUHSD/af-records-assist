@@ -100,18 +100,19 @@ flowchart LR
 ## 5. How to run it on your Mac
 
 ```
-cd /Users/mriley/Documents/_WebAppProjects/2-In-Progress/af-records-assist
-./run-web.sh
+cd af-records-assist        # wherever you cloned it
+.venv/bin/python web/app.py
 ```
 
-Then open **http://localhost:8000**. Press Ctrl+C in Terminal to stop it. `run-web.sh` loads your Claude key from the
-Keychain; it is a local helper and is not on GitHub.
+Then open **http://localhost:8000**. Press Ctrl+C in Terminal to stop it. Claude needs `ANTHROPIC_API_KEY` in the
+environment the app starts in; keep the key out of every file in this repo (a small local launcher that reads it
+from the Keychain is a good way, and stays off GitHub).
 
 - **Claude** works anywhere with internet.
 - **The rig** works only on the district network at the office (the VPN does not reach it today).
 - **Google Vault:** the app never touches Vault, so you need no Vault access. Connecting it later is back-end setup a
   Google admin does once: a Google Cloud project with the Vault API on, and a service account allowed to act for one
-  Vault-licensed admin (Google calls this "domain-wide delegation"). Brandon or Xavier would own that.
+  Vault-licensed admin (Google calls this "domain-wide delegation"). Technology's Vault administrators would own that.
 
 The command-line version still works exactly as before (`python3 records_assist.py query ...`).
 
@@ -137,7 +138,7 @@ The command-line version still works exactly as before (`python3 records_assist.
 
 1. Is the Linux VM on the rack host the right future home for this Python web app?
 2. Should `cmd_query` and `cmd_redact` each get a small function that returns results, so the web app can call them instead of repeating a few lines?
-3. Will Brandon or Xavier set up the Vault API service account, so neither of us needs Vault access?
+3. Will Technology's Vault administrators set up the Vault API service account, so neither of us needs Vault access?
 4. Will Vault exports come as .mbox for Gmail (which the app reads today)?
 5. Should the release files become PDFs with the redactions burned in?
 6. Can real record content go to Claude for redaction, or must it stay on the rig?

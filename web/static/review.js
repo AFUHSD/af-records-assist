@@ -247,7 +247,7 @@
     const finished = document.querySelector('.wizard-bar').classList.contains('is-done');
     if (!typing && e.key === 'Enter' && finished && !(e.target instanceof Element && e.target.closest('a, button'))) {
       e.preventDefault();
-      window.location.href = $('wizard-next').href; // email finished: on to the next one
+      leave($('wizard-next').href); // email finished: on to the next one, once the last change is saved
       return;
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -343,43 +343,80 @@
   });
 
   // ------------------------------------------------------------------ saving (every change, in order)
-  let saving = false;
-  let again = false;
+  let dirty = false; // a change the server has not been sent yet
+  let failed = false; // the last save did not reach the server
+  let sending = 0;
+  let chain = Promise.resolve();
   let timer = null;
   const saveState = $('save-state');
 
   function queueSave() {
+    dirty = true;
     saveState.textContent = 'Saving…';
     clearTimeout(timer);
-    timer = setTimeout(save, 300);
+    timer = setTimeout(flush, 300);
   }
 
-  async function save() {
-    if (saving) { again = true; return; }
-    saving = true;
+  // a reviewer's own redaction always goes as "new", so one brought back by Undo after a Remove is added again
+  // rev: the version of this record's decisions this page was built from. The server refuses a save made from an
+  // older one, so a second reviewer's stale page cannot quietly undo the first reviewer's decisions.
+  let rev = data.rev || 0;
+  const payload = () => JSON.stringify({ rev, suggestions: suggestions.map(({ id, start, end, category: label, decision, reasons, found_by: by }) => ({
+    id: by.length === 1 && by[0] === 'reviewer' ? `new-${start}-${end}` : id,
+    start, end, category: label, decision, reason: reasons && reasons.reviewer })) });
+
+  // Send whatever is waiting, now, after any save already on its way. Resolves when the server has answered.
+  function flush() {
+    clearTimeout(timer);
+    if (dirty) {
+      dirty = false;
+      sending += 1;
+      chain = chain.then(send);
+    }
+    return chain;
+  }
+
+  async function send() {
     try {
-      const response = await fetch(data.saveUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // a reviewer's own redaction always goes as "new", so one brought back by Undo after a Remove is added again
-        body: JSON.stringify({ suggestions: suggestions.map(({ id, start, end, category: label, decision, reasons, found_by: by }) => ({
-          id: by.length === 1 && by[0] === 'reviewer' ? `new-${start}-${end}` : id,
-          start, end, category: label, decision, reason: reasons && reasons.reviewer })) }),
-      });
+      const response = await fetch(data.saveUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload() });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      if (!again) {
+      failed = false;
+      rev = result.rev;
+      if (!dirty) {
         suggestions = result.suggestions;
         refresh(false);
       }
       saveState.textContent = 'All changes saved.';
     } catch (error) {
+      failed = true;
+      dirty = true; // still owed to the server; the next change or the next attempt to leave sends it again
       saveState.textContent = `Not saved: ${error.message}`;
     } finally {
-      saving = false;
-      if (again) { again = false; save(); }
+      sending -= 1;
     }
   }
+
+  // Leaving the page waits for the last change. A redaction made a moment before "Continue to sign off" must be on
+  // the server before sign-off reads the record, or the release goes out without it.
+  async function leave(href) {
+    await flush();
+    if (failed) {
+      toast('Your last change is not saved, so this page is staying open. Check the connection and try again.');
+      return;
+    }
+    window.location.href = href;
+  }
+
+  document.addEventListener('click', (event) => {
+    const link = event.target instanceof Element && event.target.closest('a[href]');
+    if (!link || link.target === '_blank' || event.metaKey || event.ctrlKey || event.shiftKey || (!dirty && !sending)) return;
+    event.preventDefault();
+    leave(link.href);
+  });
+  window.addEventListener('pagehide', () => { // the tab is closing or the address bar was used: a last attempt
+    if (dirty) fetch(data.saveUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload(), keepalive: true });
+  });
 
   // ------------------------------------------------------------------ keep the two panes scrolling together
   let syncing = false;

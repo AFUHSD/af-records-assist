@@ -70,7 +70,11 @@
   <script src="{{ url_for('static', filename='product-tour.js') }}"></script>
   <script src="{{ url_for('static', filename='tips.js') }}"></script>
   {% block scripts %}{% endblock %}
-  <!-- Site Feedback: reviewers click Feedback, then any part of the page, and comments land at apps.aguafria.org/feedback -->
+  {% if not allow_real %}
+  <!-- Site Feedback: reviewers click Feedback, then any part of the page, and comments land at apps.aguafria.org/feedback.
+       Off once real records are allowed: a comment carries up to 200 characters of whatever was clicked, and on the
+       review screen that is unredacted record text, copied to a board other people read. -->
   <script src="https://apps.aguafria.org/feedback/widget.js" data-project="af-records-assist"></script>
+  {% endif %}
 </body>
 </html>

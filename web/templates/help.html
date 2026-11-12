@@ -185,14 +185,14 @@
   <div class="help-cards">
     <div class="card">
       <h3>Click-through demo, no setup</h3>
-      <p>A saved walkthrough with fictional answers already filled in, published as a Claude artifact on Oct 29. Good for seeing the screens and the flow. Nothing in it calls a model or saves anything.</p>
-      <p><a href="https://claude.ai/artifact/Pj3AbUBHidCMaWeqhWkf7v">Open the demo</a></p>
+      <p>A saved walkthrough with fictional answers already filled in. Good for seeing the screens and the flow. Nothing in it calls a model or saves anything.</p>
+      <p>Ask a project owner for the link; it is shared with district staff, not published here.</p>
     </div>
     <div class="card">
       <h3>The real app, on the Mac it runs on</h3>
       <p>The app listens only on that computer, so testing the live version means sitting at it or screen-sharing. From the project folder:</p>
-      <pre><code>./run-web.sh</code></pre>
-      <p>Then open <code>http://localhost:8000</code>. Ctrl+C in Terminal stops it. The script loads the Claude key from the Keychain. If no key is found it says so and starts with the rig only. To use the rig you must be on the district network.</p>
+      <pre><code>.venv/bin/python web/app.py</code></pre>
+      <p>Then open <code>http://localhost:8000</code>. Ctrl+C in Terminal stops it. Claude is ready when <code>ANTHROPIC_API_KEY</code> is in the environment the app starts in; without it the app starts with the rig only. To use the rig you must be on the district network.</p>
     </div>
   </div>
 </section>
