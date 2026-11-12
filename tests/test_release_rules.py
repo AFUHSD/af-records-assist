@@ -126,7 +126,7 @@ class ReleaseRules(unittest.TestCase):
     def test_no_release_file_or_file_name_carries_a_redacted_name(self):
         req = self.signed_off()
         self.assertTrue(req["signed_off_at"])
-        release = web.DATA / "REQ-0001" / "release"
+        release = web.release_folder(req)
         with zipfile.ZipFile(release / "REQ-0001-RELEASE.zip") as z:
             names = z.namelist()
             self.assertFalse([n for n in names if "Jordan" in n or "Vale" in n or "INTERNAL" in n], names)
