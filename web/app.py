@@ -2,8 +2,9 @@
 """
 Records Assist web app (prototype, 2026-10-26): a browser front end on top of records_assist.py.
 
-records_assist.py is not changed. This app imports its prompts, pattern pass, exemption table and both providers
-(rig and Claude) and calls them, so a change to a prompt or pattern there shows up here on the next start.
+The engine's prompts, patterns and providers are not changed (its one addition is the token count each call
+reports). This app imports its prompts, pattern pass, exemption table and both providers (rig and Claude) and calls
+them, so a change to a prompt or pattern there shows up here on the next start.
 
   .venv/bin/python web/app.py        then open http://localhost:8000
 
@@ -70,9 +71,28 @@ DECISIONS = ("pending", "approve", "reject")
 
 app = Flask(__name__)
 app.secret_key = os.urandom(16)  # flash messages only; nothing needs to survive a restart
-app.config["MAX_CONTENT_LENGTH"] = None  # no cap: a Vault .mbox export can be gigabytes, and this only listens on this Mac
+_max_mb = os.environ.get("RECORDS_MAX_UPLOAD_MB", "")
+# No cap by default: a Vault .mbox export can be gigabytes, and this only listens on this computer. A hosted copy sets one.
+app.config["MAX_CONTENT_LENGTH"] = int(_max_mb) * 1024 * 1024 if _max_mb.isdigit() else None
 app.config["MAX_FORM_MEMORY_SIZE"] = None  # pasted email text in the form has no cap either (Werkzeug 3.1 defaults to 500 KB)
+# The names this app answers to. Anything else is refused, so a web page that points its own hostname at 127.0.0.1
+# (DNS rebinding) cannot read record text. A hosted copy lists its public name in RECORDS_TRUSTED_HOSTS.
+app.config["TRUSTED_HOSTS"] = [h.strip() for h in os.environ.get("RECORDS_TRUSTED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
 _lock = threading.Lock()  # one writer at a time per request file
+UPLOAD_TYPES = (".mbox", ".eml", ".txt")
+
+
+@app.before_request
+def same_site_only():
+    """A request that changes something must come from this app's own pages. Browsers label every cross-site POST
+    (Sec-Fetch-Site, Origin), so another open tab cannot sign off, reopen, delete, or start a paid model call."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    site = request.headers.get("Sec-Fetch-Site")
+    origin = request.headers.get("Origin")
+    if (site and site not in ("same-origin", "none")) or (origin and origin.split("://", 1)[-1] != request.host):
+        abort(403)
+    return None
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -171,7 +191,7 @@ def model_status() -> dict[str, str | None]:
     """None means ready; otherwise the reason it is not."""
     return {
         "rig": None if rig_online() else "Not reachable. The rig answers only on the district network.",
-        "claude": None if os.environ.get("ANTHROPIC_API_KEY") else "No API key. Start the app with ./run-web.sh.",
+        "claude": None if os.environ.get("ANTHROPIC_API_KEY") else "No API key. Start the app with ANTHROPIC_API_KEY set.",
     }
 
 
@@ -185,16 +205,17 @@ def provider(name: str):
 def complete(p, system: str, user: str, max_tokens: int = 2000, ledger: list | None = None, step: str = "", record: str | None = None) -> str:
     """One model call. When a ledger is given, the tokens the model reported for this call are priced and appended
     to it, so every dollar a request costs is on the request itself (request.json -> "usage")."""
+    p.last_usage = None  # so a call that fails before the model answers cannot be billed as the previous call again
     try:
-        out = p.complete(system, user, max_tokens=max_tokens)
+        return p.complete(system, user, max_tokens=max_tokens)
     except SystemExit as e:  # e.g. Claude declined
         raise RuntimeError(str(e)) from None
-    u = getattr(p, "last_usage", None)
-    if ledger is not None and u:
-        ledger.append({"at": now(), "step": step, "model": p.name, "model_id": u["model_id"], "record": record,
-                       "input_tokens": u["input_tokens"], "output_tokens": u["output_tokens"],
-                       "cost_usd": ra.cost_usd(u["model_id"], u["input_tokens"], u["output_tokens"])})
-    return out
+    finally:  # a call the model answered is billed even when the answer was a refusal
+        u = getattr(p, "last_usage", None)
+        if ledger is not None and u:
+            ledger.append({"at": now(), "step": step, "model": p.name, "model_id": u["model_id"], "record": record,
+                           "input_tokens": u["input_tokens"], "output_tokens": u["output_tokens"],
+                           "cost_usd": ra.cost_usd(u["model_id"], u["input_tokens"], u["output_tokens"])})
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -263,10 +284,11 @@ def estimate(req: dict) -> dict | None:
 # ---------------------------------------------------------------------------------------------------------------------
 # Step 2: the search plan (the same calls cmd_query makes, returned instead of printed)
 # ---------------------------------------------------------------------------------------------------------------------
-def draft_plan(request_text: str, model: str) -> tuple[dict, list[dict]]:
-    """The plan and the usage lines its model calls produced."""
+def draft_plan(request_text: str, model: str, ledger: list | None = None) -> tuple[dict, list[dict]]:
+    """The plan and the usage lines its model calls produced. Pass a ledger to keep the usage line of a call whose
+    answer could not be read."""
     p = provider(model)
-    ledger: list[dict] = []
+    ledger = [] if ledger is None else ledger
     user = f"Today is {date.today().isoformat()}. The public records request reads:\n\n{request_text.strip()}"
     raw = complete(p, ra.QUERY_SYSTEM, user, ledger=ledger, step="plan")
     try:
@@ -292,26 +314,38 @@ def pattern_spans(text: str) -> list[dict]:
     return found
 
 
+_MASK = re.compile(r"\[REDACTED: [A-Z-]+\]")  # what the pattern pass leaves in the text the model reads
+
+
 def locate(text: str, needle: str) -> list[tuple[int, int]]:
     spans = [(m.start(), m.end()) for m in re.finditer(re.escape(needle), text)]
-    if not spans:  # a model joins a sentence the record breaks across lines; match it across the break
-        loose = r"\s+".join(re.escape(w) for w in needle.split())
+    if not spans:
+        # A model joins a sentence the record breaks across lines, and it quotes the pattern pass's placeholder where
+        # the record has the real value. Match across the break, and across whatever the placeholder stands for.
+        parts = [r"\s+".join(re.escape(w) for w in part.split()) for part in _MASK.split(needle)]
+        while parts and not parts[0]:
+            parts.pop(0)
+        while parts and not parts[-1]:
+            parts.pop()
+        loose = r"\s*.{1,200}?\s*".join(parts)
         spans = [(m.start(), m.end()) for m in re.finditer(loose, text)] if loose else []
     return spans
 
 
-def model_spans(model: str, masked: str, original: str, record: str | None = None) -> tuple[list[dict], list[str], list[dict]]:
-    """Spans, reviewer notes, and the usage lines of every call made for this record."""
+def model_spans(model: str, masked: str, original: str, record: str | None = None, ledger: list | None = None) -> tuple[list[dict], list[str], list[dict]]:
+    """Spans, reviewer notes, and the usage lines of every call made for this record. Pass a ledger to keep the
+    usage lines of the calls that were made when a later one fails."""
     p = provider(model)
     size = ra.RIG_CHUNK_CHARS if model == "rig" else 60000
-    found, notes, ledger = [], [], []
+    found, notes = [], []
+    ledger = [] if ledger is None else ledger
     for piece in ra.chunks(masked, size):
         raw = complete(p, ra.REDACT_SYSTEM, "Record text:\n\n" + piece, max_tokens=1500, ledger=ledger, step="redact", record=record)
         try:
             reply = ra.parse_json(raw)
         except (ValueError, json.JSONDecodeError):
-            notes.append("The reply for one part of this record was not readable; review that part by hand.")
-            continue
+            # Not a note: a part of the record nobody read must not count as checked.
+            raise RuntimeError("the reply for part of this record was not readable (it may have been cut off). Check it again.") from None
         if reply.get("note"):
             notes.append(str(reply["note"]))
         for span in reply.get("spans") or []:
@@ -320,6 +354,8 @@ def model_spans(model: str, masked: str, original: str, record: str | None = Non
             if category not in ra.EXEMPTIONS:
                 category = "FERPA" if "student" in category.lower() else "PERSONNEL"
             where = locate(original, text) if len(text) >= 2 else []
+            if not where and not _MASK.sub("", text).strip():
+                continue  # only a placeholder: the pattern pass already holds that span
             if not where:
                 notes.append(f"Proposed text that is not in the record (ignored): {text[:60]!r}")
             for start, end in where:
@@ -328,20 +364,23 @@ def model_spans(model: str, masked: str, original: str, record: str | None = Non
 
 
 def merge(found: list[dict], previous: list[dict], text: str) -> list[dict]:
-    """One suggestion per exact span, listing every pass that found it. A re-check keeps decisions already made."""
+    """One suggestion per exact span, listing every pass that found it. A re-check only ever adds: every earlier
+    suggestion stays with its decision, whether or not this run found it again. A model's answer varies from run to
+    run and a re-check may use a different model, so "not found this time" is never a reason to drop a redaction."""
     by_span: dict[tuple[int, int], dict] = {}
+    for s in previous:  # earlier suggestions first, exactly as they were
+        by_span[(s["start"], s["end"])] = {**s, "found_by": list(s["found_by"]), "reasons": dict(s.get("reasons") or {}),
+                                           "categories": dict(s.get("categories") or {})}
     for f in found:
-        s = by_span.setdefault((f["start"], f["end"]), {"start": f["start"], "end": f["end"], "found_by": [], "reasons": {}, "categories": {}})
+        s = by_span.setdefault((f["start"], f["end"]), {"start": f["start"], "end": f["end"], "found_by": [], "reasons": {}, "categories": {},
+                                                        "decision": "pending"})
         if f["by"] not in s["found_by"]:
             s["found_by"].append(f["by"])
         s["reasons"][f["by"]], s["categories"][f["by"]] = f["reason"], f["category"]
-    before = {(s["start"], s["end"]): s for s in previous}
     out = list(by_span.values())
     for s in out:
         c = s["categories"]
-        s["category"] = c.get("pattern") or c.get("claude") or c.get("rig")
-        s["decision"] = before[(s["start"], s["end"])]["decision"] if (s["start"], s["end"]) in before else "pending"
-    out += [s for s in previous if s["found_by"] == ["reviewer"] and (s["start"], s["end"]) not in by_span]
+        s["category"] = c.get("pattern") or c.get("claude") or c.get("rig") or c.get("reviewer") or s.get("category")
     out.sort(key=lambda s: (s["start"], s["end"]))
     for i, s in enumerate(out, 1):
         s["id"], s["text"] = f"S{i:03d}", text[s["start"]:s["end"]]
@@ -451,7 +490,19 @@ def pages_filter(text: str) -> int:
 def when(value: str | None) -> str:
     if not value:
         return ""
-    return datetime.fromisoformat(value).strftime("%b %-d, %Y %-I:%M %p")
+    d = datetime.fromisoformat(value)  # no %-d or %-I: those flags exist on macOS and Linux only and raise on Windows
+    return f"{d:%b} {d.day}, {d.year} {d.hour % 12 or 12}:{d:%M %p}"
+
+
+def frozen(req: dict) -> bool:
+    """A signed-off request does not change: its release files and its log describe exactly what was signed.
+    Reopen it first."""
+    return bool(req.get("signed_off_at"))
+
+
+def refuse_frozen(rid: str):
+    flash("This request is signed off. Reopen it before changing its records.", "error")
+    return redirect(url_for("signoff_page", rid=rid))
 
 
 def fictional_ok() -> bool:
@@ -515,12 +566,13 @@ def request_with_replies(req: dict) -> str:
 
 def _draft_and_go(rid: str, model: str):
     req = load(rid)
+    ledger: list[dict] = []
     try:
         if model_status().get(model):
             raise RuntimeError(f"{MODELS.get(model, model)} is not available: {model_status()[model]}")
-        (plan, ledger), error = draft_plan(request_with_replies(req), model), None
+        (plan, _), error = draft_plan(request_with_replies(req), model, ledger), None
     except Exception as e:  # shown on the page; the request itself is kept
-        plan, ledger, error = None, [], str(e)
+        plan, error = None, str(e)
     with _lock:
         req = load(rid)
         if plan:  # a new plan means asking the question again: is it clear enough to search?
@@ -604,7 +656,10 @@ def estimate_sent(rid):
         if est:
             req["estimate"] = {"sent_at": now(), "quoted": est, "decision": None, "decided_at": None}
             save(req)
-    flash("Marked as sent. The numbers quoted are kept with the request.", "ok")
+    if est:
+        flash("Marked as sent. The numbers quoted are kept with the request.", "ok")
+    else:
+        flash("Nothing was marked: save the Vault count first, so there is an estimate to quote.", "error")
     return redirect(url_for("records_page", rid=rid, _anchor="estimate"))
 
 
@@ -637,6 +692,8 @@ def save_vault(rid):
 def upload_records(rid):
     if not fictional_ok():
         return redirect(url_for("records_page", rid=rid))
+    if frozen(load(rid)):
+        return refuse_frozen(rid)
     exports = folder(rid) / "exports"  # step 5: every export is kept, as received, beside the request
     exports.mkdir(parents=True, exist_ok=True)
     items: list[tuple[str, str]] = []
@@ -645,6 +702,10 @@ def upload_records(rid):
             if f and f.filename:
                 if f.filename.lower().endswith(".pst"):
                     flash(f"{f.filename} is a PST (Outlook) export, which this app cannot read. Ask Technology to export the same Vault search again as .mbox.", "error")
+                    return redirect(url_for("records_page", rid=rid))
+                if not f.filename.lower().endswith(UPLOAD_TYPES):
+                    # anything else would be read as text and reviewed as one garbled "record" (a Vault .zip, a PDF)
+                    flash(f"{f.filename} was not added: this app reads .mbox, .eml and .txt. A Vault export arrives as a .zip; unzip it and upload the .mbox inside.", "error")
                     return redirect(url_for("records_page", rid=rid))
                 path = exports / f"{datetime.now():%Y%m%d-%H%M%S}-{secure_filename(f.filename)}"
                 f.save(path)
@@ -658,6 +719,8 @@ def upload_records(rid):
         items.append((subject.group(1).strip() if subject else "Pasted email", pasted.replace("\r\n", "\n")))
     with _lock:
         req = load(rid)
+        if frozen(req):
+            return refuse_frozen(rid)
         before = len(req["records"])
         add_records(req, items, "upload")
         save(req)
@@ -670,6 +733,8 @@ def upload_records(rid):
 def add_samples(rid):
     with _lock:
         req = load(rid)
+        if frozen(req):
+            return refuse_frozen(rid)
         before = len(req["records"])
         add_records(req, [(p.stem.replace("-", " ").capitalize(), p.read_text(encoding="utf-8")) for p in SAMPLE_RECORDS], "sample")
         save(req)
@@ -681,6 +746,8 @@ def add_samples(rid):
 def delete_record(rid, rec_id):
     with _lock:
         req = load(rid)
+        if frozen(req):
+            return refuse_frozen(rid)
         find_record(req, rec_id)
         req["records"] = [r for r in req["records"] if r["id"] != rec_id]
         save(req)
@@ -689,7 +756,10 @@ def delete_record(rid, rec_id):
 
 @app.post("/api/r/<rid>/records/<rec_id>/check")
 def check_record(rid, rec_id):
-    rec = find_record(load(rid), rec_id)
+    req = load(rid)
+    if frozen(req):
+        return jsonify(error="This request is signed off; reopen it to check a record again."), 409
+    rec = find_record(req, rec_id)
     ready = model_status()
     wanted = [m for m in (request.get_json(silent=True) or {}).get("models", []) if m in MODELS and ready[m] is None]
     if not wanted:
@@ -697,21 +767,26 @@ def check_record(rid, rec_id):
     original = rec["text"]
     masked, _ = ra.deterministic_pass(original)  # the model sees exactly what the command line sends it
     found, notes, errors, ledger = pattern_spans(original), [], [], []
+    used = {m: [] for m in wanted}  # each model's usage lines, kept even when one of its calls fails
     with ThreadPoolExecutor(max_workers=len(wanted)) as pool:  # rig and Claude side by side
-        futures = {m: pool.submit(model_spans, m, masked, original, rec_id) for m in wanted}
+        futures = {m: pool.submit(model_spans, m, masked, original, rec_id, used[m]) for m in wanted}
         for m, future in futures.items():
             try:
-                spans, said, used = future.result()
+                spans, said, _ = future.result()
                 found += spans
                 notes += [{"by": m, "text": n} for n in said]
-                ledger += used
             except Exception as e:
                 errors.append(f"{MODELS[m]}: {e}")
+            ledger += used[m]
     with _lock:
         req = load(rid)
+        if frozen(req):
+            return jsonify(error="This request is signed off; reopen it to check a record again."), 409
         rec = find_record(req, rec_id)
         rec["suggestions"] = merge(found, rec["suggestions"], original)
-        rec.update(checked_at=now() if len(errors) < len(wanted) else None, models=wanted, notes=notes, errors=errors)
+        # Checked means every model the reviewer chose read the whole record. One failure leaves it unchecked: what
+        # the others found is kept, the error is shown, and sign-off stays closed until a check runs clean.
+        rec.update(checked_at=None if errors else now(), models=wanted, notes=notes, errors=errors, rev=rec.get("rev", 0) + 1)
         req.setdefault("usage", []).extend(ledger)
         save(req)
     totals = usage_totals(req["usage"])
@@ -739,12 +814,17 @@ def review_page(rid):
 @app.post("/api/r/<rid>/records/<rec_id>/decisions")
 def save_decisions(rid, rec_id):
     """The review screen sends its whole list back; check every field before keeping any of it."""
-    incoming = (request.get_json(silent=True) or {}).get("suggestions", [])
+    body = request.get_json(silent=True) or {}
+    incoming = body.get("suggestions", [])
     with _lock:
         req = load(rid)
         if req.get("signed_off_at"):
             return jsonify(error="This request is signed off; reopen it to change decisions."), 409
         rec = find_record(req, rec_id)
+        # The screen sends its whole list, so a page opened before someone else's save would write their decisions
+        # back to what it last saw. Each save and each check moves the record's rev on; an older page is refused.
+        if "rev" in body and body["rev"] != rec.get("rev", 0):
+            return jsonify(error="someone else changed this record while this page was open. Reload to see their decisions."), 409
         # matched by position, not id: ids are renumbered on every save and the screen may still hold old ones
         current = {(s["start"], s["end"]): s for s in rec["suggestions"]}
         seen = set()
@@ -768,8 +848,9 @@ def save_decisions(rid, rec_id):
         for i, s in enumerate(kept, 1):
             s["id"], s["text"] = f"S{i:03d}", rec["text"][s["start"]:s["end"]]
         rec["suggestions"] = kept
+        rec["rev"] = rec.get("rev", 0) + 1
         save(req)
-    return jsonify(suggestions=kept)
+    return jsonify(suggestions=kept, rev=rec["rev"])
 
 
 @app.get("/r/<rid>/signoff")
@@ -783,6 +864,8 @@ def sign_off(rid):
     reviewer = request.form.get("reviewer", "").strip()
     with _lock:
         req = load(rid)
+        if frozen(req):
+            return refuse_frozen(rid)
         pending = sum(1 for r in req["records"] for s in r["suggestions"] if s["decision"] == "pending")
         unchecked = [r for r in req["records"] if not r.get("checked_at")]
         if not reviewer or pending or unchecked or not req["records"]:
@@ -800,6 +883,7 @@ def reopen(rid):
     with _lock:
         req = load(rid)
         req["signed_off_at"] = req["signed_off_by"] = None
+        req["outputs"] = []  # the release files describe the request as it was signed; once it can change they are stale
         save(req)
     return redirect(url_for("review_page", rid=rid))
 
@@ -811,7 +895,8 @@ def write_outputs(req: dict) -> list[str]:
     out.mkdir(parents=True, exist_ok=True)
     names = []
     for rec in req["records"]:
-        name = f"{req['id']}-{rec['id']}-{secure_filename(rec['name'])[:60] or 'record'}-REDACTED.txt"
+        # Never the record's name: it is the email's Subject line, which no redaction touches ("Suspension of <student>").
+        name = f"{req['id']}-{rec['id']}-REDACTED.txt"
         (out / name).write_text(redacted(rec["text"], rec["suggestions"]), encoding="utf-8")
         names.append(name)
     pdf_name = f"{req['id']}-RELEASE-all-records-REDACTED.pdf"
@@ -898,7 +983,9 @@ def write_release_pdf(req: dict, path: Path) -> None:
              Paragraph("Each black bar marks text withheld under the exemption named on it. The full list of exemptions applied is available on request.", ParagraphStyle("note", parent=meta, alignment=TA_CENTER)),
              PageBreak()]
     for i, rec in enumerate(records):
-        story += [Paragraph(f"Record {escape(rec['id'])} of {len(records)}: {escape(rec['name'])}", head),
+        # The heading carries the record's number only. Its name is the Subject line, unredacted; the Subject the
+        # requester may see is the one in the body below, with the reviewer's redactions applied.
+        story += [Paragraph(f"Record {i + 1} of {len(records)} ({escape(rec['id'])})", head),
                   Paragraph(f"{sum(1 for s in rec['suggestions'] if s['decision'] == 'approve')} redaction(s)", meta),
                   Spacer(1, 0.15 * inch)]
         story += redacted_paragraphs(rec["text"], rec["suggestions"], body)

@@ -103,6 +103,7 @@
   "saveUrl": url_for('save_decisions', rid=req.id, rec_id=rec.id),
   "text": rec.text,
   "suggestions": rec.suggestions,
+  "rev": rec.rev | default(0),
   "exemptions": exemptions,
   "models": models,
   "locked": req.signed_off_at is not none
