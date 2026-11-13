@@ -126,7 +126,10 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Reque
    OR NOT EXISTS (SELECT 1 FROM sys.indexes AS i JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
                   JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
                   WHERE i.object_id = OBJECT_ID(N'dbo.Requests', N'U') AND i.is_primary_key = 1 AND c.name = N'RequestId')
-   OR NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'dbo.Requests', N'U') AND is_disabled = 0)
+   OR (SELECT COUNT(*) FROM sys.indexes AS i JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+       WHERE i.object_id = OBJECT_ID(N'dbo.Requests', N'U') AND i.is_primary_key = 1) <> 1
+   OR (SELECT COUNT(*) FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'dbo.Requests', N'U') AND is_disabled = 0
+       AND is_not_trusted = 0 AND name IN (N'CK_Requests_Doc_IsJson', N'CK_Requests_RequestId')) <> 2
     SET @missing += N' table dbo.Requests (RequestId key, Doc nvarchar(max), RowVer rowversion, its CHECK);';
 IF COL_LENGTH(N'dbo.AuditEvents', N'Detail') IS NULL OR COL_LENGTH(N'dbo.AuditEvents', N'Actor') IS NULL
    OR COL_LENGTH(N'dbo.AuditEvents', N'Action') IS NULL OR COL_LENGTH(N'dbo.AuditEvents', N'RequestId') IS NULL
@@ -139,7 +142,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_AuditEvents_Request' 
 IF NOT EXISTS (SELECT 1 FROM sys.triggers AS t
                WHERE t.object_id = OBJECT_ID(N'dbo.TR_AuditEvents_AppendOnly', N'TR') AND t.parent_id = OBJECT_ID(N'dbo.AuditEvents', N'U')
                  AND t.is_disabled = 0 AND t.is_instead_of_trigger = 1
-                 AND (SELECT COUNT(*) FROM sys.trigger_events AS e WHERE e.object_id = t.object_id AND e.type_desc IN (N'UPDATE', N'DELETE')) = 2)
+                 AND (SELECT COUNT(*) FROM sys.trigger_events AS e WHERE e.object_id = t.object_id AND e.type_desc IN (N'UPDATE', N'DELETE')) = 2
+                 AND (SELECT COUNT(*) FROM sys.trigger_events AS e WHERE e.object_id = t.object_id) = 2)
     SET @missing += N' trigger dbo.TR_AuditEvents_AppendOnly (on dbo.AuditEvents, enabled, INSTEAD OF UPDATE and DELETE);';
 IF @missing <> N''
 BEGIN

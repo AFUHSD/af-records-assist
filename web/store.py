@@ -21,6 +21,10 @@ A content file is never changed once written. Its name carries the hash of what 
 document names the file it means, so a save that fails part-way leaves the files the last good save pointed at
 exactly as they were. Files no document points at are removed after the save has been kept.
 
+A record that came back unreadable is never saved over. Whatever the request is saved for, that record's entry in
+the document (its file, its hash, its decisions, whether it was checked) goes back exactly as it was stored, and
+its file is left where it is. The only thing that changes an unreadable record is removing it.
+
 The audit trail (who did what, when) is append-only in both: a .jsonl file per request, or dbo.AuditEvents. An
 audit line names a record and a position in it. It never carries record text. A save and its audit lines are one
 step: hosted, they commit together or not at all.
@@ -61,9 +65,12 @@ def split(req: dict) -> tuple[dict, dict[str, dict]]:
     doc = {k: v for k, v in req.items() if k not in ("records", "_ver")}
     doc["records"], contents = [], {}
     for rec in req.get("records") or []:
+        if rec.get("_stored") is not None:  # came back unreadable: keep what the document said, write nothing
+            doc["records"].append(rec["_stored"])
+            continue
         content = {k: rec.get(k) for k in RECORD_CONTENT}
         content["suggestions"] = {f"{s['start']}-{s['end']}": {k: s.get(k) for k in SUGGESTION_CONTENT} for s in rec.get("suggestions") or []}
-        meta = {k: v for k, v in rec.items() if k not in RECORD_CONTENT and k != "suggestions"}
+        meta = {k: v for k, v in rec.items() if k not in RECORD_CONTENT and k != "suggestions" and not k.startswith("_")}
         meta["suggestions"] = [{k: v for k, v in s.items() if k not in SUGGESTION_CONTENT} for s in rec.get("suggestions") or []]
         meta["chars"], meta["sha256"], meta["failed"] = len(rec.get("text") or ""), text_hash(rec.get("text")), len(rec.get("errors") or [])
         meta["content"] = content_hash(content)  # which content file this record means
@@ -90,6 +97,7 @@ def join(doc: dict, contents: dict[str, dict]) -> dict:
         if problem:  # never blank and checked: an empty record would sign off as nothing to redact
             content = {"name": rec["id"], "text": "", "notes": [], "errors": [], "suggestions": {}}
             rec["checked_at"] = None
+            rec["_stored"] = json.loads(json.dumps(meta))  # split() puts this back untouched, whatever happens to rec
         rec.update({k: content.get(k) for k in RECORD_CONTENT})
         rec["notes"], rec["errors"] = rec["notes"] or [], (rec["errors"] or []) + ([problem] if problem else [])
         words = content.get("suggestions") or {}
@@ -154,10 +162,11 @@ class ContentFiles:
             except OSError:
                 pass  # an unused file no document points at; the next save's prune takes it
 
-    def prune(self, rid: str, contents: dict[str, dict]) -> None:
+    def prune(self, rid: str, doc: dict) -> None:
         """Remove every content file the saved document does not point at. Called only after the save is kept; a
-        file it cannot remove is tried again by the next save."""
-        keep = {self._name(rec_id, content_hash(content)) for rec_id, content in contents.items()}
+        file it cannot remove is tried again by the next save. A file the document points at stays even when it
+        cannot be read: it is the only copy."""
+        keep = {self._name(meta["id"], meta.get("content")) for meta in doc.get("records") or []}
         for p in self._dir(rid).glob("R*.json"):
             if p.name not in keep:
                 try:
@@ -202,7 +211,7 @@ class FileStore:
         except BaseException:
             self.content.discard(made)
             raise
-        self.content.prune(req["id"], contents)
+        self.content.prune(req["id"], doc)
         for actor, action, detail in events or []:
             self.audit(req["id"], actor, action, detail)
 
@@ -310,7 +319,7 @@ class SqlStore:
                     c.execute("INSERT INTO dbo.AuditEvents (RequestId, Actor, Action, Detail) VALUES (?, ?, ?, ?);", rid, actor[:256], action[:40], json.dumps(detail or {}))
                 committing = True
                 c.commit()
-                self.content.prune(rid, contents)  # still under the lock: no other save of this request is part-way
+                self.content.prune(rid, doc)  # still under the lock: no other save of this request is part-way
             except BaseException:
                 if not committing:
                     # Not kept, so take the new files back. A commit that raised may still have been kept (a dropped

@@ -37,6 +37,11 @@ file is missing, unreadable, or not the bytes its name promises comes back empty
 it, and cannot be checked again; it has to be removed and uploaded again. It cannot sign off as "nothing to
 redact".
 
+An unreadable record is never saved over. Whatever the request is saved for afterwards, that record's entry in the
+document goes back exactly as it was stored and its file is left in place, so a damaged file can still be
+recovered by hand and the loss cannot be made to look like an intact empty record. Removing the record is the only
+thing that changes it.
+
 Hosted, a save holds a lock on that request and goes in this order: confirm nobody else saved first; write any new
 content files under new names; update the row and write the audit lines in one transaction; commit; only then
 remove the files no document points at. If anything fails before the commit, the row is as it was and every file
@@ -78,7 +83,7 @@ the wrong one, and is safe to run twice.
 
 1. `00-databases.sql` creates two empty databases: `RecordsAssist` and `RecordsAssistTest`.
 2. `01-schema.sql` and `01-schema.test.sql` create the same three tables, sequence and trigger in each. The two
-   files differ only in the database name.
+   files differ only in the database name. So do `02-app-identity.sql` and `02-app-identity.test.sql`.
 3. `02-app-identity.sql` creates the app's login from its Windows service account and grants it exactly what
    `SqlStore` uses: read and insert on requests, update on two columns of it (`Doc`, `UpdatedAt`); read and insert
    on the audit trail; read on the access list; the sequence. It is in no role and has no DDL rights. The script
@@ -110,10 +115,10 @@ Proven against SQL Server (the tests in `SqlServer`, which run when `RECORDS_TES
 
 **Not proven yet:**
 
-- `01-schema.sql` has not run on the live database. It is the test script with the database name changed (a test
-  checks that), so the statements have run; the file has not.
-- `02-app-identity.sql` has never run. The SQL tests ran as the database owner, so the app identity's narrower
-  grants, its DENYs, and the script's own checks are compiled (`SET NOEXEC ON`) and nothing more.
+- No statement has run as the app identity. All release scripts have been applied, and the identity's effective
+  rights on the live database were read back from SQL Server while impersonating it and matched the list above.
+  To run the storage tests as the identity: apply `02-app-identity.test.sql` (the same script for the test
+  database), then set `RECORDS_TEST_SQL_AS` to the identity's name alongside `RECORDS_TEST_SQL`.
 - Nothing has run behind the real front door or under IIS. The path prefix and the forwarded host name are tested
   with a stand-in.
 - The database and the data folder are not one transaction. What that leaves: if the process dies between the

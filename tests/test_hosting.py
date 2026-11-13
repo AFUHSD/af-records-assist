@@ -8,6 +8,7 @@ The SQL Server tests run only when RECORDS_TEST_SQL holds a connection string fo
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import os
 import sys
 import tempfile
@@ -102,6 +103,36 @@ class TwoHalves(Base):
             self.assertEqual(self.client.post("/api/r/REQ-0001/records/R01/check", json={"models": ["claude"]}).status_code, 409)
         path.write_text("{ not json", encoding="utf-8")
         self.assertIsNone(web.load("REQ-0001")["records"][0]["checked_at"])
+
+    def test_an_unreadable_record_is_never_saved_over_whatever_the_request_is_saved_for(self):
+        """Lose or damage the content file, then do everything a reviewer could do to the request. The document's
+        entry for that record (its file, hash, decisions, checked state) must not move, and the damaged file must
+        still be there: saving an empty record over it would make the loss permanent and look intact."""
+        req = sample()
+        req["records"][0]["suggestions"][0]["decision"] = "approve"
+        web.add_records(req, [("Second", "Second email.")], "upload")
+        web.save(req)
+        stored = lambda: json.loads((web.DATA / "REQ-0001" / "request.json").read_text(encoding="utf-8"))["records"][0]
+        before, path = stored(), content_file()
+        for damage in ("{ not json", json.dumps({"name": "R01", "text": "", "notes": [], "errors": [], "suggestions": {}})):
+            path.write_text(damage, encoding="utf-8")
+            self.client.post("/r/REQ-0001/vault", data={"count": "7", "notes": "seven"})
+            self.client.post("/r/REQ-0001/records/upload", data={"pasted": "Subject: third" + chr(10) + chr(10) + "Third email.", "fictional": "yes"})
+            self.client.post("/r/REQ-0001/records/R02/delete")
+            self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"rev": before.get("rev", 0), "suggestions": []})
+            self.client.post("/r/REQ-0001/signoff", data={"reviewer": "Tester"})
+            hasty = web.load("REQ-0001")  # and the worst a handler could do: treat the empty record as real and checked
+            hasty["records"][0].update(checked_at=web.now(), suggestions=[], text="", rev=99)
+            web.save(hasty)
+            self.assertEqual(web.load("REQ-0001")["vault"]["count"], 7)  # the unrelated saves did happen
+            self.assertEqual(stored(), before)
+            self.assertEqual(path.read_text(encoding="utf-8"), damage)
+            rec = web.load("REQ-0001")["records"][0]
+            self.assertEqual((rec["checked_at"], rec["text"], bool(rec["errors"])), (None, "", True))
+            self.assertIsNone(web.load("REQ-0001")["signed_off_at"])
+        self.client.post("/r/REQ-0001/records/R01/delete")  # the one way out
+        self.assertNotIn("R01", [r["id"] for r in web.load("REQ-0001")["records"]])
+        self.assertFalse(path.exists())
 
     def test_a_removed_records_number_is_never_given_out_again(self):
         req = sample()
@@ -298,8 +329,10 @@ class TwoPeopleAtOnce(Base):
         live, test = (sql / "01-schema.sql").read_text(encoding="utf-8"), (sql / "01-schema.test.sql").read_text(encoding="utf-8")
         import re
         self.assertEqual(re.sub(r"RecordsAssist(?!Test)", "RecordsAssistTest", live), test, "01-schema.test.sql has drifted from 01-schema.sql")
+        live, test = (sql / "02-app-identity.sql").read_text(encoding="utf-8"), (sql / "02-app-identity.test.sql").read_text(encoding="utf-8")
+        self.assertEqual(re.sub(r"RecordsAssist(?!Test)", "RecordsAssistTest", live), test, "02-app-identity.test.sql has drifted from 02-app-identity.sql")
         for name, database in (("00-databases.sql", "master"), ("01-schema.sql", "RecordsAssist"), ("01-schema.test.sql", "RecordsAssistTest"),
-                               ("02-app-identity.sql", "RecordsAssist")):
+                               ("02-app-identity.sql", "RecordsAssist"), ("02-app-identity.test.sql", "RecordsAssistTest")):
             text = (sql / name).read_text(encoding="utf-8")
             self.assertIn(f"USE [{database}];", text, name)
             self.assertIn(f"IF @db <> N'{database}'", text, f"{name}: no exact DB_NAME() guard")
@@ -322,6 +355,18 @@ class SqlServer(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.store = storage.SqlStore(os.environ["RECORDS_TEST_SQL"], lambda: Path(self.tmp.name))
+        run_as = os.environ.get("RECORDS_TEST_SQL_AS", "").strip()
+        if run_as:  # every connection becomes the app's own database user, so its grants are what is being tested
+            plain = self.store._connect
+
+            @contextmanager
+            def as_the_app():
+                with plain() as c:
+                    c.execute("EXECUTE AS USER = ?;", run_as)
+                    self.assertEqual(c.execute("SELECT USER_NAME();").fetchval(), run_as)
+                    yield c
+
+            self.store._connect = as_the_app
         if self.store.database() == "RecordsAssist":
             self.fail("RECORDS_TEST_SQL points at the live database")
 

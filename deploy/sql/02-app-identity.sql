@@ -6,6 +6,9 @@
 
    Run as a DBA, after 00 and 01-schema, and after the app's Windows service
    account exists in the directory. Safe to run twice.
+   02-app-identity.test.sql is this file with the database name changed: the
+   same identity and the same rights in the test database, so the storage
+   tests can run as the identity the app runs as.
 
    BEFORE RUNNING: replace the placeholder in @AppPrincipal below with the
    app's service account (DOMAIN\account). The release runner does this from
@@ -89,6 +92,7 @@ BEGIN
 END
 
 SET @sql = N'
+REVOKE UPDATE                ON dbo.Requests      FROM ' + @who + N';
 GRANT SELECT, INSERT         ON dbo.Requests      TO ' + @who + N';
 GRANT UPDATE (Doc, UpdatedAt) ON dbo.Requests     TO ' + @who + N';
 GRANT SELECT, INSERT         ON dbo.AuditEvents   TO ' + @who + N';
