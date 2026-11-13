@@ -876,6 +876,13 @@ def check_record(rid, rec_id):
         if frozen(req):
             return jsonify(error="This request is signed off; reopen it to check a record again."), 409
         rec = find_record(req, rec_id)
+        if rec["text"] != original:
+            # The record's text could not be read back (or is not what the models were sent), so nothing found can
+            # be kept against it. Say so, here and in the audit trail; the money was still spent, so the ledger keeps it.
+            req.setdefault("usage", []).extend(ledger)
+            save(req, "record-check-discarded", record=rec_id, models=wanted)
+            return jsonify(error="This record's text could not be read back after the check, so the check was not kept. "
+                                 "Open the records page to see what is wrong with it."), 409
         rec["suggestions"] = merge(found, rec["suggestions"], original)
         # Checked means every model the reviewer chose read the whole record. One failure leaves it unchecked: what
         # the others found is kept, the error is shown, and sign-off stays closed until a check runs clean.

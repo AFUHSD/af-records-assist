@@ -105,7 +105,7 @@ class TwoHalves(Base):
         self.assertIsNone(web.load("REQ-0001")["records"][0]["checked_at"])
 
     def test_an_unreadable_record_is_never_saved_over_whatever_the_request_is_saved_for(self):
-        """Lose or damage the content file, then do everything a reviewer could do to the request. The document's
+        """Damage the content file, then save the request for unrelated reasons (a Vault note, an upload, a removal). The document's
         entry for that record (its file, hash, decisions, checked state) must not move, and the damaged file must
         still be there: saving an empty record over it would make the loss permanent and look intact."""
         req = sample()
