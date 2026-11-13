@@ -118,6 +118,10 @@ Proven against SQL Server (the tests in `SqlServer`, which run when `RECORDS_TES
   applied, `RECORDS_TEST_SQL_AS` set to the identity's name), by impersonation from a DBA's connection. That
   covers the sequence, the lock, the column-level update, the audit insert and the refused audit change under the
   identity's own grants. It is not the app's own process signing in as that account.
+- A process running as the service account itself (its own Windows sign-in to SQL Server, no impersonation) drove
+  `SqlStore` on the test database: number, save, load, stale save refused, audit lines. It was refused everything
+  it should be: changing or deleting an audit line, deleting a request, changing a request's number, adding to
+  the access list, creating a table, disabling the audit trigger. It can open its own two databases and no other.
 
 **Not proven yet:**
 
