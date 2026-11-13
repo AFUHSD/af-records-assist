@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import email
 import email.policy
+import hashlib
+import hmac
 import json
 import mailbox
 import os
@@ -33,7 +35,8 @@ from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import (Flask, abort, flash, g, has_request_context, jsonify, redirect, render_template, render_template_string, request,
+                   send_from_directory, url_for)
 from werkzeug.utils import secure_filename
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
@@ -43,9 +46,13 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import records_assist as ra  # noqa: E402  the engine: imported and called, never edited from here
+import store as storage  # noqa: E402  where requests are kept: files on one computer, SQL Server when hosted
 
-DATA = ROOT / "out" / "requests"
+# The data folder: record content, uploads as received, release files. Hosted, RECORDS_DATA_DIR points at a folder
+# outside the app's own, readable by the app's identity and by nobody who does not handle records.
+DATA = Path(os.environ.get("RECORDS_DATA_DIR") or ROOT / "out" / "requests")
 SAMPLE_REQUEST = ROOT / "samples" / "request.txt"
 SAMPLE_RECORDS = [ROOT / "samples" / "email-export.txt", *sorted((ROOT / "samples" / "benchmark").glob("*.txt"))]
 ALLOW_REAL_RECORDS = os.environ.get("RECORDS_ALLOW_REAL", "") == "true"
@@ -70,7 +77,10 @@ MEASURED = {  # calibrate_costs.py, 2026-11-09, claude-opus-5-5: 7 calls, $0.20 
 DECISIONS = ("pending", "approve", "reject")
 
 app = Flask(__name__)
-app.secret_key = os.urandom(16)  # flash messages only; nothing needs to survive a restart
+app.secret_key = os.environ.get("RECORDS_SECRET_KEY") or os.urandom(16)  # flash messages only; nothing needs to survive a restart
+STORE = storage.make_store(lambda: DATA)
+PLATFORM_AUTH = os.environ.get("RECORDS_PLATFORM_AUTH", "").strip().lower() in ("1", "true", "yes")
+PATH_BASE = "/" + os.environ.get("RECORDS_PATH_BASE", "").strip("/") if os.environ.get("RECORDS_PATH_BASE", "").strip("/") else ""
 _max_mb = os.environ.get("RECORDS_MAX_UPLOAD_MB", "")
 # No cap by default: a Vault .mbox export can be gigabytes, and this only listens on this computer. A hosted copy sets one.
 app.config["MAX_CONTENT_LENGTH"] = int(_max_mb) * 1024 * 1024 if _max_mb.isdigit() else None
@@ -90,48 +100,125 @@ def same_site_only():
         return None
     site = request.headers.get("Sec-Fetch-Site")
     origin = request.headers.get("Origin")
-    if (site and site not in ("same-origin", "none")) or (origin and origin.split("://", 1)[-1] != request.host):
+    if (site and site not in ("same-origin", "none")) or (origin and origin.rstrip("/") != request.host_url.rstrip("/")):
         abort(403)
     return None
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Storage: one JSON file per request
+# Who is asking. On one computer nobody signs in. Hosted, the district front door signs people in and passes the
+# identity in a header; this app believes that header only with the shared secret beside it, and then only lets in
+# an address on the access list.
+# ---------------------------------------------------------------------------------------------------------------------
+EMAIL_HEADER, NAME_HEADER, SECRET_HEADER = "X-AFUHSD-Email", "X-AFUHSD-Name", "X-AFUHSD-FrontDoor"
+HEALTH_PATHS = ("/health", "/_frontdoor/health")
+REFUSED = """<!doctype html><html lang="en"><meta charset="utf-8"><title>No access · Records Assist</title>
+<body style="font: 16px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 0 1rem">
+<h1>You do not have access to Records Assist</h1>
+<p>You are signed in as <strong>{{ email }}</strong>. This tool holds public records under review, so it is open
+only to the staff who handle records requests.</p>
+<p>If you handle records requests and should be here, ask the Technology department to add you.</p></body></html>"""
+
+
+def single_address(raw: str | None) -> str | None:
+    """The header's value if it is exactly one address. A header sent twice arrives joined with a comma, and the
+    second address must not ride in on the first."""
+    value = (raw or "").strip().lower()
+    if not value or value.count("@") != 1 or any(ch in ",;" or ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return None
+    return value
+
+
+@app.before_request
+def who_is_asking():
+    g.user = None
+    if not PLATFORM_AUTH or request.path in HEALTH_PATHS:
+        return None
+    secret = os.environ.get("FRONT_DOOR_SHARED_SECRET", "").strip()
+    # No secret configured means refuse everyone: a missing setting must not turn into "believe any header".
+    if not secret or not hmac.compare_digest(request.headers.get(SECRET_HEADER, ""), secret):
+        abort(403)
+    email = single_address(request.headers.get(EMAIL_HEADER))
+    if email is None or not email.endswith("@aguafria.org"):
+        abort(403)
+    if STORE.role(email) is None:
+        if request.method == "GET":
+            STORE.audit(None, email, "refused", {})  # who and when; never the address asked for, which is theirs to type
+        return render_template_string(REFUSED, email=email), 403
+    g.user = email
+    return None
+
+
+def actor() -> str:
+    return (g.get("user") if has_request_context() else None) or "local"
+
+
+def audit(rid: str | None, action: str, **detail) -> None:
+    """One line in the audit trail: who, what, when. Record ids and positions only, never record text."""
+    STORE.audit(rid, actor(), action, detail)
+
+
+@app.get("/health")
+@app.get("/_frontdoor/health")
+def health():
+    """Up, and able to reach its own storage. No sign-in: the host's readiness check calls this."""
+    try:
+        return f"Healthy\n  {STORE.ping()}\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"Unhealthy\n  storage: {type(e).__name__}\n", 503, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Storage: the request document and the record content (web/store.py)
 # ---------------------------------------------------------------------------------------------------------------------
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
 def folder(rid: str) -> Path:
-    if not re.fullmatch(r"REQ-\d{4}", rid):
+    if not re.fullmatch(r"REQ-\d{4,8}", rid):
         abort(404)
     return DATA / rid
 
 
 def load(rid: str) -> dict:
-    path = folder(rid) / "request.json"
-    if not path.exists():
+    folder(rid)
+    req = STORE.load(rid)
+    if req is None:
         abort(404)
-    return json.loads(path.read_text(encoding="utf-8"))
+    return req
 
 
-def save(req: dict) -> None:
+def save(req: dict, action: str | None = None, **detail) -> None:
+    """Save the request and, in the same step, the audit line that says what changed. Hosted, the two commit
+    together or not at all: a change cannot be saved without its line."""
     req["updated"] = now()
-    path = folder(req["id"]) / "request.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(req, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    folder(req["id"])
+    STORE.save(req, [(actor(), action, detail)] if action else None)
+
+
+def release_folder(req: dict) -> Path:
+    """Each sign-off writes into a folder of its own, named on the request. A sign-off that loses to somebody
+    else's, or is interrupted, never touches the files a saved request points at."""
+    return folder(req["id"]) / "release" / secure_filename(str(req.get("release") or "none"))
+
+
+@app.errorhandler(storage.Conflict)
+def someone_else_saved(e):
+    """Two people changed the same request at the same moment. The second change was not written."""
+    message = "Someone else changed this request at the same moment, so your change was not saved. Reload the page and try again."
+    if request.path.startswith("/api/"):
+        return jsonify(error=message), 409
+    flash(message, "error")
+    return redirect(request.referrer or url_for("home"))
 
 
 def all_requests() -> list[dict]:
-    reqs = [json.loads(p.read_text(encoding="utf-8")) for p in DATA.glob("REQ-*/request.json")]
-    return sorted(reqs, key=lambda r: r["id"], reverse=True)
+    return STORE.all()
 
 
 def next_id() -> str:
-    nums = [int(p.name[4:]) for p in DATA.glob("REQ-*") if p.name[4:].isdigit()]
-    return f"REQ-{max(nums, default=0) + 1:04d}"
+    return STORE.new_id()
 
 
 def find_record(req: dict, rec_id: str) -> dict:
@@ -464,10 +551,12 @@ def records_from_file(path: Path) -> list[tuple[str, str]]:
 
 
 def add_records(req: dict, items: list[tuple[str, str]], source: str) -> None:
-    n = max((int(r["id"][1:]) for r in req["records"]), default=0)  # never reuse the id of a removed record
+    # Never reuse the id of a removed record, even the highest one: the request remembers the last number it gave out.
+    n = max([req.get("last_record", 0)] + [int(r["id"][1:]) for r in req["records"]])
     for name, text in items:
         if text.strip():
             n += 1
+            req["last_record"] = n
             req["records"].append({"id": f"R{n:02d}", "name": name[:120], "source": source, "text": text,
                                    "checked_at": None, "models": [], "suggestions": [], "notes": [], "errors": []})
 
@@ -552,7 +641,7 @@ def create_request():
                "received": request.form.get("received") or date.today().isoformat(),
                "plan": None, "plan_error": None, "plan_approved_at": None, "vault": {"count": None, "notes": ""},
                "records": [], "signed_off_at": None, "signed_off_by": None, "outputs": [], "usage": [], "estimate": None}
-        save(req)
+        save(req, "request-created", received=req["received"])
     return _draft_and_go(rid, request.form.get("model", "claude"))
 
 
@@ -579,7 +668,7 @@ def _draft_and_go(rid: str, model: str):
             req["plan"], req["plan_approved_at"], req["plan_choice"] = plan, None, None
         req["plan_error"] = error
         req.setdefault("usage", []).extend(ledger)  # a call that was made costs money even if its answer was unreadable
-        save(req)
+        save(req, "plan-drafted", model=model if model in MODELS else "unknown", ok=bool(plan))
     return redirect(url_for("plan_page", rid=rid))
 
 
@@ -610,7 +699,7 @@ def plan_choose(rid):
             req["plan_choice"] = choice
             if choice == "ask":
                 req["plan_approved_at"] = None  # a plan waiting on the requester is not an approved plan
-            save(req)
+            save(req, "plan-choice", choice=choice)
     return redirect(url_for("plan_page", rid=rid, _anchor="decide"))
 
 
@@ -626,7 +715,7 @@ def plan_reply(rid):
         replies = req.setdefault("replies", [])
         if not replies or replies[-1]["text"] != text:  # pasting it again after a failed draft must not keep it twice
             replies.append({"at": now(), "text": text})
-        save(req)
+        save(req, "requester-reply-added")
     return _draft_and_go(rid, request.form.get("model", "claude"))
 
 
@@ -636,7 +725,7 @@ def plan_approve(rid):
         req = load(rid)
         if req.get("plan"):
             req["plan_approved_at"], req["plan_choice"] = now(), "search"
-            save(req)
+            save(req, "plan-approved")
     return redirect(url_for("records_page", rid=rid))
 
 
@@ -655,7 +744,7 @@ def estimate_sent(rid):
         est = estimate(req)
         if est:
             req["estimate"] = {"sent_at": now(), "quoted": est, "decision": None, "decided_at": None}
-            save(req)
+            save(req, "estimate-sent", total_usd=round(est["total_usd"], 2), count=est["count"])
     if est:
         flash("Marked as sent. The numbers quoted are kept with the request.", "ok")
     else:
@@ -670,10 +759,10 @@ def estimate_decision(rid):
         req = load(rid)
         if req.get("estimate") and decision in ("proceed", "declined"):
             req["estimate"].update(decision=decision, decided_at=now())
-            save(req)
+            save(req, "estimate-decision", decision=decision)
         elif decision == "reset" and req.get("estimate"):
             req["estimate"] = None
-            save(req)
+            save(req, "estimate-decision", decision="reset")
     return redirect(url_for("records_page", rid=rid, _anchor="estimate"))
 
 
@@ -683,7 +772,7 @@ def save_vault(rid):
         req = load(rid)
         count = request.form.get("count", "").replace(",", "").strip()
         req["vault"] = {"count": int(count) if count.isdigit() else None, "notes": request.form.get("notes", "").strip()}
-        save(req)
+        save(req, "vault-count-saved", count=req["vault"]["count"])
     flash("Vault details saved.", "ok")
     return redirect(url_for("records_page", rid=rid))
 
@@ -723,8 +812,8 @@ def upload_records(rid):
             return refuse_frozen(rid)
         before = len(req["records"])
         add_records(req, items, "upload")
-        save(req)
-    added = len(req["records"]) - before
+        added = len(req["records"]) - before
+        save(req, "records-added", count=added, records=[r["id"] for r in req["records"][before:]], source="upload")
     flash(f"Added {added} record{'s' if added != 1 else ''}." if added else "Nothing to add: choose a file or paste an email.", "ok" if added else "error")
     return redirect(url_for("records_page", rid=rid))
 
@@ -737,7 +826,7 @@ def add_samples(rid):
             return refuse_frozen(rid)
         before = len(req["records"])
         add_records(req, [(p.stem.replace("-", " ").capitalize(), p.read_text(encoding="utf-8")) for p in SAMPLE_RECORDS], "sample")
-        save(req)
+        save(req, "records-added", count=len(req["records"]) - before, records=[r["id"] for r in req["records"][before:]], source="sample")
     flash(f"Added {len(req['records']) - before} fictional sample emails.", "ok")
     return redirect(url_for("records_page", rid=rid))
 
@@ -749,8 +838,10 @@ def delete_record(rid, rec_id):
         if frozen(req):
             return refuse_frozen(rid)
         find_record(req, rec_id)
+        # remember the highest number ever used, so a request from before last_record existed cannot reuse one
+        req["last_record"] = max([req.get("last_record", 0)] + [int(r["id"][1:]) for r in req["records"]])
         req["records"] = [r for r in req["records"] if r["id"] != rec_id]
-        save(req)
+        save(req, "record-removed", record=rec_id)
     return redirect(url_for("records_page", rid=rid))
 
 
@@ -760,6 +851,8 @@ def check_record(rid, rec_id):
     if frozen(req):
         return jsonify(error="This request is signed off; reopen it to check a record again."), 409
     rec = find_record(req, rec_id)
+    if not rec["text"].strip():  # only a record whose text was lost or altered in the data folder is ever empty
+        return jsonify(error="This record has no readable text. Remove it and upload it again."), 409
     ready = model_status()
     wanted = [m for m in (request.get_json(silent=True) or {}).get("models", []) if m in MODELS and ready[m] is None]
     if not wanted:
@@ -783,12 +876,19 @@ def check_record(rid, rec_id):
         if frozen(req):
             return jsonify(error="This request is signed off; reopen it to check a record again."), 409
         rec = find_record(req, rec_id)
+        if rec["text"] != original:
+            # The record's text could not be read back (or is not what the models were sent), so nothing found can
+            # be kept against it. Say so, here and in the audit trail; the money was still spent, so the ledger keeps it.
+            req.setdefault("usage", []).extend(ledger)
+            save(req, "record-check-discarded", record=rec_id, models=wanted)
+            return jsonify(error="This record's text could not be read back after the check, so the check was not kept. "
+                                 "Open the records page to see what is wrong with it."), 409
         rec["suggestions"] = merge(found, rec["suggestions"], original)
         # Checked means every model the reviewer chose read the whole record. One failure leaves it unchecked: what
         # the others found is kept, the error is shown, and sign-off stays closed until a check runs clean.
         rec.update(checked_at=None if errors else now(), models=wanted, notes=notes, errors=errors, rev=rec.get("rev", 0) + 1)
         req.setdefault("usage", []).extend(ledger)
-        save(req)
+        save(req, "record-checked", record=rec_id, models=wanted, checked=bool(rec["checked_at"]), failed=len(errors), suggestions=len(rec["suggestions"]))
     totals = usage_totals(req["usage"])
     return jsonify(id=rec_id, checked=bool(rec["checked_at"]), suggestions=len(rec["suggestions"]), errors=errors,
                    cost_usd=sum(u["cost_usd"] for u in ledger), total_usd=totals["total_usd"])
@@ -823,10 +923,11 @@ def save_decisions(rid, rec_id):
         rec = find_record(req, rec_id)
         # The screen sends its whole list, so a page opened before someone else's save would write their decisions
         # back to what it last saw. Each save and each check moves the record's rev on; an older page is refused.
-        if "rev" in body and body["rev"] != rec.get("rev", 0):
+        if body.get("rev") != rec.get("rev", 0):  # a save that does not say which version it saw is refused too
             return jsonify(error="someone else changed this record while this page was open. Reload to see their decisions."), 409
         # matched by position, not id: ids are renumbered on every save and the screen may still hold old ones
         current = {(s["start"], s["end"]): s for s in rec["suggestions"]}
+        was = {key: s["decision"] for key, s in current.items()}
         seen = set()
         for s in incoming:
             try:
@@ -848,9 +949,15 @@ def save_decisions(rid, rec_id):
         for i, s in enumerate(kept, 1):
             s["id"], s["text"] = f"S{i:03d}", rec["text"][s["start"]:s["end"]]
         rec["suggestions"] = kept
-        rec["rev"] = rec.get("rev", 0) + 1
-        save(req)
-    return jsonify(suggestions=kept, rev=rec["rev"])
+        # Who decided what: one line per span whose decision moved, by position and category. Never the words.
+        now_is = {(s["start"], s["end"]): s for s in kept}
+        changes = [{"start": k[0], "end": k[1], "category": s["category"], "from": was.get(k, "added"), "to": s["decision"]}
+                   for k, s in now_is.items() if was.get(k) != s["decision"]]
+        changes += [{"start": k[0], "end": k[1], "from": d, "to": "removed"} for k, d in was.items() if k not in now_is]
+        if changes:  # a save that changes nothing writes nothing, and leaves the record's rev where it was
+            rec["rev"] = rec.get("rev", 0) + 1
+            save(req, "decisions", record=rec_id, rev=rec["rev"], changes=changes)
+    return jsonify(suggestions=kept, rev=rec.get("rev", 0))
 
 
 @app.get("/r/<rid>/signoff")
@@ -861,7 +968,8 @@ def signoff_page(rid):
 
 @app.post("/r/<rid>/signoff")
 def sign_off(rid):
-    reviewer = request.form.get("reviewer", "").strip()
+    # Hosted, the reviewer is whoever is signed in; a typed name cannot sign for somebody else.
+    reviewer = g.get("user") or request.form.get("reviewer", "").strip()
     with _lock:
         req = load(rid)
         if frozen(req):
@@ -872,8 +980,11 @@ def sign_off(rid):
             flash("Sign-off needs a reviewer name, every record checked, and a decision on every suggestion.", "error")
             return redirect(url_for("signoff_page", rid=rid))
         req["signed_off_at"], req["signed_off_by"] = now(), reviewer
+        req["release"] = f"{datetime.now():%Y%m%d-%H%M%S}-{os.urandom(3).hex()}"
         req["outputs"] = write_outputs(req)
-        save(req)
+        release = release_folder(req)
+        save(req, "signed-off", reviewer=reviewer, records=len(req["records"]), release=req["release"],
+             files={name: hashlib.sha256((release / name).read_bytes()).hexdigest() for name in req["outputs"]})
     flash(f"{rid} is signed off. The redacted records and the log are saved below.", "ok")
     return redirect(url_for("signoff_page", rid=rid))
 
@@ -884,14 +995,14 @@ def reopen(rid):
         req = load(rid)
         req["signed_off_at"] = req["signed_off_by"] = None
         req["outputs"] = []  # the release files describe the request as it was signed; once it can change they are stale
-        save(req)
+        save(req, "reopened")
     return redirect(url_for("review_page", rid=rid))
 
 
 def write_outputs(req: dict) -> list[str]:
     """Step 8's paper trail: one redacted file per record for release, one combined PDF of all of them, a zip of
     everything that may be released, and one internal log that must not be released."""
-    out = folder(req["id"]) / "release"
+    out = release_folder(req)
     out.mkdir(parents=True, exist_ok=True)
     names = []
     for rec in req["records"]:
@@ -997,9 +1108,34 @@ def write_release_pdf(req: dict, path: Path) -> None:
 
 @app.get("/r/<rid>/files/<name>")
 def download(rid, name):
-    if name not in load(rid).get("outputs", []):
+    req = STORE.load(rid, content=False) if folder(rid) else None
+    if req is None or name not in req.get("outputs", []):
         abort(404)
-    return send_from_directory(folder(rid) / "release", name, as_attachment=True)
+    audit(rid, "downloaded", file=name, release=req.get("release"))
+    return send_from_directory(release_folder(req), name, as_attachment=True)
+
+
+class UnderPath:
+    """Hosted under a path such as /records: tell Flask its own address so every link, redirect and static file it
+    writes stays under that path, whether or not the front door strips the path before passing the request on."""
+
+    def __init__(self, wsgi, base: str):
+        self.wsgi, self.base = wsgi, base
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path == self.base or path.startswith(self.base + "/"):
+            environ["PATH_INFO"] = path[len(self.base):] or "/"
+        environ["SCRIPT_NAME"] = self.base
+        return self.wsgi(environ, start_response)
+
+
+if PLATFORM_AUTH:  # behind the front door: the public host name and https arrive in X-Forwarded-* headers
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+if PATH_BASE:
+    app.wsgi_app = UnderPath(app.wsgi_app, PATH_BASE)
 
 
 if __name__ == "__main__":

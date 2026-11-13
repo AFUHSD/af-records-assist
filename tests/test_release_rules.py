@@ -126,7 +126,7 @@ class ReleaseRules(unittest.TestCase):
     def test_no_release_file_or_file_name_carries_a_redacted_name(self):
         req = self.signed_off()
         self.assertTrue(req["signed_off_at"])
-        release = web.DATA / "REQ-0001" / "release"
+        release = web.release_folder(req)
         with zipfile.ZipFile(release / "REQ-0001-RELEASE.zip") as z:
             names = z.namelist()
             self.assertFalse([n for n in names if "Jordan" in n or "Vale" in n or "INTERNAL" in n], names)
@@ -161,6 +161,27 @@ class ReleaseRules(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
         self.client.post("/r/REQ-0001/reopen")
         self.assertEqual(self.client.get(f"/r/REQ-0001/files/{name}").status_code, 404)
+
+    def test_a_check_whose_record_became_unreadable_meanwhile_says_so_and_is_not_recorded_as_done(self):
+        self.request()
+        folder = web.DATA / "REQ-0001" / "records"
+
+        class Vandal(Fake):  # the content file is damaged while the model is reading
+            def complete(self, system, user, max_tokens=2000):
+                for p in folder.glob("R01*.json"):
+                    p.write_text("{ not json", encoding="utf-8")
+                return super().complete(system, user, max_tokens)
+
+        web.provider = lambda name: Vandal('{"spans": [{"text": "Jordan Vale", "category": "FERPA", "reason": "student"}]}')
+        r = self.client.post("/api/r/REQ-0001/records/R01/check", json={"models": ["claude"]})
+        self.assertEqual(r.status_code, 409)
+        self.assertNotIn("checked", r.get_json())
+        req = web.load("REQ-0001")
+        self.assertIsNone(req["records"][0]["checked_at"])
+        self.assertEqual(len(req["usage"]), 1)  # the call was paid for and is on the ledger
+        actions = [e["action"] for e in web.STORE.audit_trail("REQ-0001")]
+        self.assertIn("record-check-discarded", actions)
+        self.assertNotIn("record-checked", actions)
 
     # --- two reviewers -----------------------------------------------------------------------------------------------
     def test_a_stale_page_cannot_undo_another_reviewers_decision(self):
