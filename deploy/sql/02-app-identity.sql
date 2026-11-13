@@ -13,7 +13,7 @@
 
    No password anywhere: the app signs in to SQL Server as its own Windows
    identity. What it gets, object by object, and nothing wider:
-     dbo.Requests       SELECT, INSERT, UPDATE     (no DELETE: nothing in the app deletes a request)
+     dbo.Requests       SELECT, INSERT; UPDATE on Doc and UpdatedAt only   (no DELETE: nothing in the app deletes a request)
      dbo.AuditEvents    SELECT, INSERT             (append-only; UPDATE and DELETE are also denied)
      dbo.Access         SELECT                     (the access list is operator state; the app only reads it)
      dbo.RequestNumber  UPDATE                     (what NEXT VALUE FOR needs)
@@ -89,7 +89,8 @@ BEGIN
 END
 
 SET @sql = N'
-GRANT SELECT, INSERT, UPDATE ON dbo.Requests      TO ' + @who + N';
+GRANT SELECT, INSERT         ON dbo.Requests      TO ' + @who + N';
+GRANT UPDATE (Doc, UpdatedAt) ON dbo.Requests     TO ' + @who + N';
 GRANT SELECT, INSERT         ON dbo.AuditEvents   TO ' + @who + N';
 DENY  UPDATE, DELETE         ON dbo.AuditEvents   TO ' + @who + N';
 GRANT SELECT                 ON dbo.Access        TO ' + @who + N';
@@ -121,6 +122,37 @@ IF EXISTS (SELECT 1 FROM sys.database_role_members AS m JOIN sys.database_princi
    OR IS_SRVROLEMEMBER(N'sysadmin', @AppPrincipal) = 1
     RAISERROR(N'%s holds a database role or is sysadmin. Remove that before the app runs as it.', 16, 1, @AppPrincipal);
 ELSE PRINT 'Checked: ' + @AppPrincipal + ' is in no database role and is not sysadmin';
+
+/* The database user must be this login and not an older user of the same name. */
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals AS u JOIN sys.server_principals AS l ON l.sid = u.sid
+               WHERE u.name = @AppPrincipal AND l.name = @AppPrincipal)
+    RAISERROR(N'The database user %s is not mapped to the login of that name. Drop the user and run this script again.', 16, 1, @AppPrincipal);
+ELSE PRINT 'Checked: the database user is mapped to the login';
+
+/* Nothing beyond the list in the header: any other grant held directly in this
+   database, or on the server beyond connecting, fails the run. */
+IF EXISTS (SELECT 1
+           FROM sys.database_permissions AS p
+           JOIN sys.database_principals AS u ON u.principal_id = p.grantee_principal_id
+           LEFT JOIN sys.objects AS o ON o.object_id = p.major_id AND p.class = 1 AND o.schema_id = SCHEMA_ID(N'dbo')
+           WHERE u.name = @AppPrincipal AND p.state IN ('G', 'W')
+             AND NOT (   (p.class = 0 AND p.permission_name = N'CONNECT')
+                      OR (o.name = N'Requests' AND p.minor_id = 0 AND p.permission_name IN (N'SELECT', N'INSERT'))
+                      OR (o.name = N'Requests' AND p.minor_id <> 0 AND p.permission_name = N'UPDATE'
+                          AND COL_NAME(p.major_id, p.minor_id) IN (N'Doc', N'UpdatedAt'))
+                      OR (o.name = N'AuditEvents' AND p.minor_id = 0 AND p.permission_name IN (N'SELECT', N'INSERT'))
+                      OR (o.name = N'Access' AND p.minor_id = 0 AND p.permission_name = N'SELECT')
+                      OR (o.name = N'RequestNumber' AND p.permission_name = N'UPDATE')))
+    RAISERROR(N'%s holds a grant in this database beyond the list in the header (see the read-back above). Revoke it before the app runs as it.', 16, 1, @AppPrincipal);
+ELSE PRINT 'Checked: no grant in this database beyond the list in the header';
+
+IF EXISTS (SELECT 1 FROM sys.server_permissions AS p JOIN sys.server_principals AS l ON l.principal_id = p.grantee_principal_id
+           WHERE l.name = @AppPrincipal AND p.state IN ('G', 'W') AND p.permission_name <> N'CONNECT SQL')
+   OR EXISTS (SELECT 1 FROM sys.server_role_members AS m JOIN sys.server_principals AS l ON l.principal_id = m.member_principal_id WHERE l.name = @AppPrincipal)
+    RAISERROR(N'%s holds a server permission or server role beyond connecting. Remove it before the app runs as it.', 16, 1, @AppPrincipal);
+ELSE PRINT 'Checked: no server permission or server role beyond connecting';
+/* Not checked here: rights the account inherits from a Windows group that has
+   its own login. The account is meant to be in no groups; confirm that in AD. */
 GO
 
 SET NOEXEC OFF;

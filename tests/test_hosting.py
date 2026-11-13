@@ -51,13 +51,20 @@ class Base(unittest.TestCase):
         self.client = web.app.test_client()
 
 
+def content_file(rec_id="R01"):
+    """The one content file the saved document points at for this record."""
+    found = list((web.DATA / "REQ-0001" / "records").glob(rec_id + ".*.json"))
+    assert len(found) == 1, found
+    return found[0]
+
+
 class TwoHalves(Base):
     def test_the_request_document_holds_no_record_content(self):
         web.save(sample())
         doc = (web.DATA / "REQ-0001" / "request.json").read_text(encoding="utf-8")
         self.assertFalse([w for w in WORDS if w in doc], "record words found in the request document")
         self.assertIn("Pat Lee", doc)  # the requester and their words belong to the request, not to a record
-        content = json.loads((web.DATA / "REQ-0001" / "records" / "R01.json").read_text(encoding="utf-8"))
+        content = json.loads(content_file().read_text(encoding="utf-8"))
         self.assertEqual(content["text"], TEXT)
 
     def test_a_request_comes_back_exactly_as_it_was_saved(self):
@@ -72,7 +79,7 @@ class TwoHalves(Base):
 
     def test_a_record_whose_content_file_is_gone_is_unchecked_not_blank(self):
         web.save(sample())
-        (web.DATA / "REQ-0001" / "records" / "R01.json").unlink()
+        content_file().unlink()
         rec = web.load("REQ-0001")["records"][0]
         self.assertIsNone(rec["checked_at"])
         self.assertTrue(rec["errors"])
@@ -82,7 +89,7 @@ class TwoHalves(Base):
         req = sample()
         req["records"][0]["suggestions"] = []  # checked, nothing found: the case where an emptied file would sail through
         web.save(req)
-        path = web.DATA / "REQ-0001" / "records" / "R01.json"
+        path = content_file()
         for altered in ({"name": "R01", "text": "", "notes": [], "errors": [], "suggestions": {}},
                         {"name": "R01", "text": "Nothing to see here.", "notes": [], "errors": [], "suggestions": {}}):
             path.write_text(json.dumps(altered), encoding="utf-8")
@@ -104,6 +111,35 @@ class TwoHalves(Base):
         self.client.post("/r/REQ-0001/records/upload", data={"pasted": "Subject: third" + chr(10) + chr(10) + "Third email.", "fictional": "yes"})
         self.assertEqual([r["id"] for r in web.load("REQ-0001")["records"]], ["R01", "R03"])
 
+    def test_a_request_from_before_numbers_were_remembered_does_not_reuse_one_either(self):
+        req = sample()
+        web.add_records(req, [("Second", "Second email.")], "upload")
+        req.pop("last_record")
+        web.save(req)
+        self.client.post("/r/REQ-0001/records/R02/delete")
+        self.client.post("/r/REQ-0001/records/upload", data={"pasted": "Subject: third" + chr(10) + chr(10) + "Third email.", "fictional": "yes"})
+        self.assertEqual([r["id"] for r in web.load("REQ-0001")["records"]], ["R01", "R03"])
+
+    def test_a_save_that_fails_leaves_the_last_good_save_readable(self):
+        """New content goes to a new file. If the document is never written, the old document still finds its own."""
+        web.save(sample())
+        kept = content_file().read_bytes()
+        changed = web.load("REQ-0001")
+        changed["records"][0]["notes"] = [{"by": "claude", "text": "a second opinion"}]
+        changed["unsaveable"] = object()  # the document cannot be written, after the content file has been
+        with self.assertRaises(TypeError):
+            web.STORE.save(changed)
+        self.assertEqual(content_file().read_bytes(), kept)
+        rec = web.load("REQ-0001")["records"][0]
+        self.assertEqual((rec["text"], rec["notes"], bool(rec["checked_at"])), (TEXT, sample()["records"][0]["notes"], True))
+
+    def test_a_decision_that_does_not_say_which_version_it_saw_is_refused(self):
+        web.save(sample())
+        rec = web.load("REQ-0001")["records"][0]
+        r = self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"suggestions": [{**s, "decision": "reject"} for s in rec["suggestions"]]})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual({s["decision"] for s in web.load("REQ-0001")["records"][0]["suggestions"]}, {s["decision"] for s in rec["suggestions"]})
+
     def test_a_check_error_is_kept_with_the_content_not_in_the_document(self):
         req = sample()
         req["records"][0]["errors"] = ["Claude: could not read 'Jordan Vale was suspended'"]
@@ -114,7 +150,7 @@ class TwoHalves(Base):
     def test_removing_a_record_removes_its_content_file(self):
         web.save(sample())
         self.client.post("/r/REQ-0001/records/R01/delete")
-        self.assertFalse((web.DATA / "REQ-0001" / "records" / "R01.json").exists())
+        self.assertEqual(list((web.DATA / "REQ-0001" / "records").glob("R01*")), [])
 
     def test_a_request_saved_before_the_halves_were_separated_still_opens(self):
         req = sample()
@@ -145,7 +181,7 @@ class AuditTrail(Base):
     def test_a_sign_off_that_loses_cannot_touch_the_release_that_won(self):
         web.save(sample())
         rec = web.load("REQ-0001")["records"][0]
-        self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"suggestions": [{**s, "decision": "approve"} for s in rec["suggestions"]]})
+        self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"rev": rec.get("rev", 0), "suggestions": [{**s, "decision": "approve"} for s in rec["suggestions"]]})
         self.client.post("/r/REQ-0001/signoff", data={"reviewer": "First"})
         won = web.load("REQ-0001")
         before = {n: (web.release_folder(won) / n).read_bytes() for n in won["outputs"]}
@@ -198,6 +234,12 @@ class FrontDoor(Base):
             for path in ("/", "/r/REQ-0001/review", "/r/REQ-0001/records"):
                 self.assertEqual(self.get(path, **headers).status_code, 403, f"{label}: {path}")
 
+    def test_a_refusal_is_recorded_without_the_address_that_was_asked_for(self):
+        self.get("/Suspension-of-Jordan-Vale", **{web.SECRET_HEADER: SECRET, web.EMAIL_HEADER: "teacher@aguafria.org"})
+        raw = (web.DATA / "audit.jsonl").read_text(encoding="utf-8")
+        self.assertIn("teacher@aguafria.org", raw)
+        self.assertFalse([w for w in WORDS if w in raw])
+
     def test_no_secret_configured_refuses_everyone(self):
         os.environ["FRONT_DOOR_SHARED_SECRET"] = ""
         self.assertEqual(self.get(**{web.SECRET_HEADER: "", web.EMAIL_HEADER: "clerk@aguafria.org"}).status_code, 403)
@@ -245,7 +287,7 @@ class TwoPeopleAtOnce(Base):
 
         web.STORE = Busy(lambda: web.DATA)
         rec = web.load("REQ-0001")["records"][0]
-        r = self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"suggestions": [{**s, "decision": "approve"} for s in rec["suggestions"]]})
+        r = self.client.post("/api/r/REQ-0001/records/R01/decisions", json={"rev": rec.get("rev", 0), "suggestions": [{**s, "decision": "approve"} for s in rec["suggestions"]]})
         self.assertEqual(r.status_code, 409)
         self.assertEqual(self.client.post("/r/REQ-0001/vault", data={"count": "12"}).status_code, 302)
         web.STORE = storage.FileStore(lambda: web.DATA)
@@ -280,7 +322,8 @@ class SqlServer(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.store = storage.SqlStore(os.environ["RECORDS_TEST_SQL"], lambda: Path(self.tmp.name))
-        self.assertNotEqual(self.store.ping(), "sql: connected to RecordsAssist", "RECORDS_TEST_SQL points at the live database")
+        if self.store.database() == "RecordsAssist":
+            self.fail("RECORDS_TEST_SQL points at the live database")
 
     def test_numbers_are_unique_and_a_request_round_trips_without_content_in_the_row(self):
         a, b = self.store.new_id(), self.store.new_id()
@@ -305,6 +348,53 @@ class SqlServer(unittest.TestCase):
         self.assertEqual(self.store.load(rid)["vault"]["count"], 5)
         with self.assertRaises(storage.Conflict):
             self.store.save(sample(rid))
+
+    def test_a_save_sql_server_rolls_back_leaves_the_row_and_its_content_as_they_were(self):
+        rid = self.store.new_id()
+        self.store.save(sample(rid))
+        changed = self.store.load(rid)
+        changed["records"][0]["text"] = "Different words entirely."
+        changed["records"][0]["suggestions"] = []
+        with self.assertRaises(TypeError):  # the audit line cannot be written, after the content file and the row have been
+            self.store.save(changed, [("clerk@aguafria.org", None, {})])
+        back = self.store.load(rid)
+        self.assertEqual((back["records"][0]["text"], bool(back["records"][0]["checked_at"]), back["records"][0]["errors"]), (TEXT, True, []))
+        self.assertEqual(self.store.audit_trail(rid), [])
+        self.assertEqual(len(list((Path(self.tmp.name) / rid / "records").glob("R01*"))), 1)
+        back["vault"]["count"] = 3  # and the request is not left locked
+        self.store.save(back)
+
+    def test_two_saves_at_the_same_moment_keep_exactly_one(self):
+        """Two connections, the same loaded version, released together. One is kept; the other is told, and neither
+        its row, its audit line nor its content file survives. Twenty rounds, because a race does not lose every time."""
+        import threading
+
+        rid = self.store.new_id()
+        self.store.save(sample(rid))
+        for round_ in range(20):
+            copies = [self.store.load(rid), self.store.load(rid)]
+            gate, results = threading.Barrier(2), [None, None]
+
+            def go(i):
+                copies[i]["records"][0]["notes"] = [{"by": "claude", "text": f"round {round_} writer {i}"}]
+                gate.wait()
+                try:
+                    self.store.save(copies[i], [(f"writer{i}@aguafria.org", "race", {"round": round_})])
+                    results[i] = "kept"
+                except storage.Conflict:
+                    results[i] = "refused"
+
+            threads = [threading.Thread(target=go, args=(i,)) for i in (0, 1)]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+            self.assertEqual(sorted(results), ["kept", "refused"], f"round {round_}")
+            winner = results.index("kept")
+            back = self.store.load(rid)
+            self.assertEqual(back["records"][0]["notes"][0]["text"], f"round {round_} writer {winner}")
+            self.assertEqual((back["records"][0]["text"], back["records"][0]["errors"]), (TEXT, []))
+            self.assertEqual(len(list((Path(self.tmp.name) / rid / "records").glob("R01*"))), 1)
+            mine = [e["actor"] for e in self.store.audit_trail(rid) if e["detail"].get("round") == round_]
+            self.assertEqual(mine, [f"writer{winner}@aguafria.org"])
 
     def test_the_audit_trail_appends_and_cannot_be_changed(self):
         rid = self.store.new_id()

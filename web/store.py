@@ -17,6 +17,10 @@ The document remembers the SHA-256 of each record's text. A content file that is
 text that was saved, brings the record back unchecked with an error on it: it can never sign off as "nothing to
 redact".
 
+A content file is never changed once written. Its name carries the hash of what is in it (R01.<hash>.json) and the
+document names the file it means, so a save that fails part-way leaves the files the last good save pointed at
+exactly as they were. Files no document points at are removed after the save has been kept.
+
 The audit trail (who did what, when) is append-only in both: a .jsonl file per request, or dbo.AuditEvents. An
 audit line names a record and a position in it. It never carries record text. A save and its audit lines are one
 step: hosted, they commit together or not at all.
@@ -44,6 +48,14 @@ def text_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def content_body(content: dict) -> str:
+    return json.dumps(content, indent=2, sort_keys=True)
+
+
+def content_hash(content: dict) -> str:
+    return hashlib.sha256(content_body(content).encode("utf-8")).hexdigest()[:32]
+
+
 def split(req: dict) -> tuple[dict, dict[str, dict]]:
     """(the document with no record content, {record id: its content})."""
     doc = {k: v for k, v in req.items() if k not in ("records", "_ver")}
@@ -54,6 +66,7 @@ def split(req: dict) -> tuple[dict, dict[str, dict]]:
         meta = {k: v for k, v in rec.items() if k not in RECORD_CONTENT and k != "suggestions"}
         meta["suggestions"] = [{k: v for k, v in s.items() if k not in SUGGESTION_CONTENT} for s in rec.get("suggestions") or []]
         meta["chars"], meta["sha256"], meta["failed"] = len(rec.get("text") or ""), text_hash(rec.get("text")), len(rec.get("errors") or [])
+        meta["content"] = content_hash(content)  # which content file this record means
         doc["records"].append(meta)
         contents[rec["id"]] = content
     return doc, contents
@@ -88,7 +101,8 @@ def join(doc: dict, contents: dict[str, dict]) -> dict:
 
 
 class ContentFiles:
-    """Record content, one JSON file per record: <data folder>/REQ-nnnn/records/Rnn.json."""
+    """Record content, one JSON file per record and per version of it: <data folder>/REQ-nnnn/records/Rnn.<hash>.json.
+    A file is written once and never changed."""
 
     def __init__(self, root: Callable[[], Path]):
         self.root = root
@@ -99,31 +113,57 @@ class ContentFiles:
     def exists(self, rid: str) -> bool:
         return (self.root() / rid).exists()
 
-    def read(self, rid: str) -> dict[str, dict]:
+    @staticmethod
+    def _name(rec_id: str, digest: str | None) -> str:
+        return f"{rec_id}.{digest}.json" if digest else f"{rec_id}.json"  # no hash: saved before files carried one
+
+    def read(self, rid: str, doc: dict) -> dict[str, dict]:
+        """{record id: its content} for the files this document points at. Unreadable, or not the bytes the name
+        promises, is missing: join() brings the record back unchecked with an error."""
         out = {}
-        for p in self._dir(rid).glob("R*.json"):
+        for meta in doc.get("records") or []:
+            digest = meta.get("content")
             try:
-                out[p.stem] = json.loads(p.read_text(encoding="utf-8"))
+                raw = (self._dir(rid) / self._name(meta["id"], digest)).read_bytes()
+                if digest and hashlib.sha256(raw).hexdigest()[:32] != digest:
+                    continue
+                out[meta["id"]] = json.loads(raw.decode("utf-8"))
             except (ValueError, OSError):
-                continue  # unreadable is missing: join() brings the record back unchecked with an error
+                continue
         return out
 
-    def write(self, rid: str, contents: dict[str, dict]) -> None:
-        folder = self._dir(rid)
+    def write(self, rid: str, contents: dict[str, dict]) -> list[Path]:
+        """Write the files that are not there yet; return them, so a save that is not kept can take them back."""
+        folder, made = self._dir(rid), []
         folder.mkdir(parents=True, exist_ok=True)
         for rec_id, content in contents.items():
-            path, body = folder / f"{rec_id}.json", json.dumps(content, indent=2)
-            if path.exists() and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(body.encode("utf-8")).digest():
+            path = folder / self._name(rec_id, content_hash(content))
+            if path.exists():
                 continue
             tmp = path.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_text(body, encoding="utf-8")
+            tmp.write_bytes(content_body(content).encode("utf-8"))
             tmp.replace(path)
+            made.append(path)
+        return made
 
-    def prune(self, rid: str, keep: set[str]) -> None:
-        """Remove the content of records that are no longer on the request."""
-        for p in self._dir(rid).glob("R*.json"):
-            if p.stem not in keep:
+    @staticmethod
+    def discard(made: list[Path]) -> None:
+        for p in made:
+            try:
                 p.unlink(missing_ok=True)
+            except OSError:
+                pass  # an unused file no document points at; the next save's prune takes it
+
+    def prune(self, rid: str, contents: dict[str, dict]) -> None:
+        """Remove every content file the saved document does not point at. Called only after the save is kept; a
+        file it cannot remove is tried again by the next save."""
+        keep = {self._name(rec_id, content_hash(content)) for rec_id, content in contents.items()}
+        for p in self._dir(rid).glob("R*.json"):
+            if p.name not in keep:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 class FileStore:
@@ -143,7 +183,7 @@ class FileStore:
         if not path.exists():
             return None
         doc = json.loads(path.read_text(encoding="utf-8"))
-        return join(doc, self.content.read(rid)) if content else doc
+        return join(doc, self.content.read(rid, doc)) if content else doc
 
     def all(self) -> list[dict]:
         """Every request's document, newest first, without record content (the list of requests does not need it)."""
@@ -152,13 +192,17 @@ class FileStore:
 
     def save(self, req: dict, events: list[Event] | None = None) -> None:
         doc, contents = split(req)
-        self.content.write(req["id"], contents)
-        path = self.root() / req["id"] / "request.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-        tmp.replace(path)
-        self.content.prune(req["id"], set(contents))
+        made = self.content.write(req["id"], contents)
+        try:
+            path = self.root() / req["id"] / "request.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            tmp.replace(path)
+        except BaseException:
+            self.content.discard(made)
+            raise
+        self.content.prune(req["id"], contents)
         for actor, action, detail in events or []:
             self.audit(req["id"], actor, action, detail)
 
@@ -229,7 +273,7 @@ class SqlStore:
         if row is None:
             return None
         doc = self._doc(row)
-        return {**join(doc, self.content.read(rid)), "_ver": doc["_ver"]} if content else doc
+        return {**join(doc, self.content.read(rid, doc)), "_ver": doc["_ver"]} if content else doc
 
     def all(self) -> list[dict]:
         with self._connect() as c:
@@ -237,28 +281,49 @@ class SqlStore:
         return [self._doc(r) for r in rows]
 
     def save(self, req: dict, events: list[Event] | None = None) -> None:
+        """One request at a time (a lock held by the connection, so it outlasts the commit), and in this order: check
+        the version, write the new content files (new names, nothing existing is touched), then the row and its
+        audit lines in one transaction. Only after the commit are the files nobody points at removed. If anything
+        fails before the commit, the row is as it was and so is every file it points at."""
         doc, contents = split(req)
         body, rid = json.dumps(doc), req["id"]
+        resource = "records-assist:" + rid
         with self._connect() as c:
-            c.execute("DECLARE @r int; EXEC @r = sys.sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction', "
-                      "@LockTimeout = 15000; IF @r < 0 THROW 51001, N'Could not lock the request for saving.', 1;", "records-assist:" + rid)
-            current = c.execute("SELECT RowVer FROM dbo.Requests WHERE RequestId = ?;", rid).fetchval()
-            if req.get("_ver"):
-                if current is None or bytes(current).hex() != req["_ver"]:
+            c.execute("DECLARE @r int; EXEC @r = sys.sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Session', "
+                      "@LockTimeout = 15000; IF @r < 0 THROW 51001, N'Could not lock the request for saving.', 1;", resource)
+            made, committing = [], False
+            try:
+                current = c.execute("SELECT RowVer FROM dbo.Requests WHERE RequestId = ?;", rid).fetchval()
+                if req.get("_ver"):
+                    if current is None or bytes(current).hex() != req["_ver"]:
+                        raise Conflict(rid)
+                elif current is not None or self.content.exists(rid):
+                    # a new request whose number is already a row, or already a folder in the data folder (left by an
+                    # earlier database): never write into somebody else's request
                     raise Conflict(rid)
-            elif current is not None or self.content.exists(rid):
-                # a new request whose number is already a row, or already a folder in the data folder (left by an
-                # earlier database): never write into somebody else's request
-                raise Conflict(rid)
-            self.content.write(rid, contents)  # a row never points at words that are not there
-            if req.get("_ver"):
-                row = c.execute("UPDATE dbo.Requests SET Doc = ?, UpdatedAt = SYSUTCDATETIME() OUTPUT inserted.RowVer WHERE RequestId = ?;", body, rid).fetchone()
-            else:
-                row = c.execute("INSERT INTO dbo.Requests (RequestId, Doc) OUTPUT inserted.RowVer VALUES (?, ?);", rid, body).fetchone()
-            for actor, action, detail in events or []:
-                c.execute("INSERT INTO dbo.AuditEvents (RequestId, Actor, Action, Detail) VALUES (?, ?, ?, ?);", rid, actor[:256], action[:40], json.dumps(detail or {}))
-            self.content.prune(rid, set(contents))
-            c.commit()
+                made = self.content.write(rid, contents)  # a row never points at words that are not there
+                if req.get("_ver"):
+                    row = c.execute("UPDATE dbo.Requests SET Doc = ?, UpdatedAt = SYSUTCDATETIME() OUTPUT inserted.RowVer WHERE RequestId = ?;", body, rid).fetchone()
+                else:
+                    row = c.execute("INSERT INTO dbo.Requests (RequestId, Doc) OUTPUT inserted.RowVer VALUES (?, ?);", rid, body).fetchone()
+                for actor, action, detail in events or []:
+                    c.execute("INSERT INTO dbo.AuditEvents (RequestId, Actor, Action, Detail) VALUES (?, ?, ?, ?);", rid, actor[:256], action[:40], json.dumps(detail or {}))
+                committing = True
+                c.commit()
+                self.content.prune(rid, contents)  # still under the lock: no other save of this request is part-way
+            except BaseException:
+                if not committing:
+                    # Not kept, so take the new files back. A commit that raised may still have been kept (a dropped
+                    # connection does not say), so then the files stay: unused ones go at the next save.
+                    self.content.discard(made)
+                raise
+            finally:
+                try:
+                    c.rollback()
+                    c.execute("EXEC sys.sp_releaseapplock @Resource = ?, @LockOwner = 'Session';", resource)
+                    c.commit()
+                except self._pyodbc.Error:
+                    pass  # the connection is gone, and the lock went with it
         req["_ver"] = bytes(row.RowVer).hex()
 
     def audit(self, rid: str | None, actor: str, action: str, detail: dict | None = None) -> None:

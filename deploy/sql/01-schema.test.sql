@@ -119,13 +119,28 @@ GO
    what it said: every object, and the trigger enabled. Anything missing fails
    the batch, and the transaction never commits. */
 DECLARE @missing nvarchar(400) = N'';
-IF NOT EXISTS (SELECT 1 FROM sys.sequences WHERE name = N'RequestNumber') SET @missing += N' sequence RequestNumber;';
-IF COL_LENGTH(N'dbo.Requests', N'RowVer') IS NULL OR COL_LENGTH(N'dbo.Requests', N'Doc') IS NULL SET @missing += N' table Requests (Doc, RowVer);';
-IF COL_LENGTH(N'dbo.AuditEvents', N'Detail') IS NULL OR COL_LENGTH(N'dbo.AuditEvents', N'Actor') IS NULL SET @missing += N' table AuditEvents;';
-IF COL_LENGTH(N'dbo.Access', N'Role') IS NULL SET @missing += N' table Access;';
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_AuditEvents_Request') SET @missing += N' index IX_AuditEvents_Request;';
-IF NOT EXISTS (SELECT 1 FROM sys.triggers WHERE name = N'TR_AuditEvents_AppendOnly' AND is_disabled = 0 AND is_instead_of_trigger = 1)
-    SET @missing += N' trigger TR_AuditEvents_AppendOnly (enabled);';
+IF NOT EXISTS (SELECT 1 FROM sys.sequences WHERE object_id = OBJECT_ID(N'dbo.RequestNumber')) SET @missing += N' sequence dbo.RequestNumber;';
+/* Requests: Doc is nvarchar(max) (max_length -1), RowVer is a rowversion (system type 189), RequestId is the key. */
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Requests', N'U') AND name = N'Doc' AND system_type_id = 231 AND max_length = -1)
+   OR NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Requests', N'U') AND name = N'RowVer' AND system_type_id = 189)
+   OR NOT EXISTS (SELECT 1 FROM sys.indexes AS i JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                  JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                  WHERE i.object_id = OBJECT_ID(N'dbo.Requests', N'U') AND i.is_primary_key = 1 AND c.name = N'RequestId')
+   OR NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'dbo.Requests', N'U') AND is_disabled = 0)
+    SET @missing += N' table dbo.Requests (RequestId key, Doc nvarchar(max), RowVer rowversion, its CHECK);';
+IF COL_LENGTH(N'dbo.AuditEvents', N'Detail') IS NULL OR COL_LENGTH(N'dbo.AuditEvents', N'Actor') IS NULL
+   OR COL_LENGTH(N'dbo.AuditEvents', N'Action') IS NULL OR COL_LENGTH(N'dbo.AuditEvents', N'RequestId') IS NULL
+   OR COL_LENGTH(N'dbo.AuditEvents', N'At') IS NULL OR ISNULL(COLUMNPROPERTY(OBJECT_ID(N'dbo.AuditEvents', N'U'), N'EventId', 'IsIdentity'), 0) <> 1
+    SET @missing += N' table dbo.AuditEvents;';
+IF COL_LENGTH(N'dbo.Access', N'Role') IS NULL OR COL_LENGTH(N'dbo.Access', N'Email') IS NULL SET @missing += N' table dbo.Access;';
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_AuditEvents_Request' AND object_id = OBJECT_ID(N'dbo.AuditEvents', N'U'))
+    SET @missing += N' index IX_AuditEvents_Request on dbo.AuditEvents;';
+/* The trigger: on dbo.AuditEvents itself, enabled, INSTEAD OF, and for both UPDATE and DELETE. */
+IF NOT EXISTS (SELECT 1 FROM sys.triggers AS t
+               WHERE t.object_id = OBJECT_ID(N'dbo.TR_AuditEvents_AppendOnly', N'TR') AND t.parent_id = OBJECT_ID(N'dbo.AuditEvents', N'U')
+                 AND t.is_disabled = 0 AND t.is_instead_of_trigger = 1
+                 AND (SELECT COUNT(*) FROM sys.trigger_events AS e WHERE e.object_id = t.object_id AND e.type_desc IN (N'UPDATE', N'DELETE')) = 2)
+    SET @missing += N' trigger dbo.TR_AuditEvents_AppendOnly (on dbo.AuditEvents, enabled, INSTEAD OF UPDATE and DELETE);';
 IF @missing <> N''
 BEGIN
     RAISERROR(N'Schema is incomplete, nothing was committed. Missing:%s', 16, 1, @missing);

@@ -143,7 +143,7 @@ def who_is_asking():
         abort(403)
     if STORE.role(email) is None:
         if request.method == "GET":
-            STORE.audit(None, email, "refused", {"path": request.path})
+            STORE.audit(None, email, "refused", {})  # who and when; never the address asked for, which is theirs to type
         return render_template_string(REFUSED, email=email), 403
     g.user = email
     return None
@@ -838,6 +838,8 @@ def delete_record(rid, rec_id):
         if frozen(req):
             return refuse_frozen(rid)
         find_record(req, rec_id)
+        # remember the highest number ever used, so a request from before last_record existed cannot reuse one
+        req["last_record"] = max([req.get("last_record", 0)] + [int(r["id"][1:]) for r in req["records"]])
         req["records"] = [r for r in req["records"] if r["id"] != rec_id]
         save(req, "record-removed", record=rec_id)
     return redirect(url_for("records_page", rid=rid))
@@ -914,7 +916,7 @@ def save_decisions(rid, rec_id):
         rec = find_record(req, rec_id)
         # The screen sends its whole list, so a page opened before someone else's save would write their decisions
         # back to what it last saw. Each save and each check moves the record's rev on; an older page is refused.
-        if "rev" in body and body["rev"] != rec.get("rev", 0):
+        if body.get("rev") != rec.get("rev", 0):  # a save that does not say which version it saw is refused too
             return jsonify(error="someone else changed this record while this page was open. Reload to see their decisions."), 409
         # matched by position, not id: ids are renumbered on every save and the screen may still hold old ones
         current = {(s["start"], s["end"]): s for s in rec["suggestions"]}
