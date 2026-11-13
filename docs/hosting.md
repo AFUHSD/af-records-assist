@@ -112,13 +112,15 @@ Proven against SQL Server (the tests in `SqlServer`, which run when `RECORDS_TES
   content the row points at are as they were, and the request is not left locked.
 - Two saves of the same request released at the same moment, twenty rounds: exactly one is kept each time. With
   the lock weakened the same test fails in the first round.
+- All release scripts have been applied. The app identity's effective rights on the live database were read back
+  from SQL Server while impersonating it and match the list above.
+- The six SQL Server tests also pass run as the app identity on the test database (`02-app-identity.test.sql`
+  applied, `RECORDS_TEST_SQL_AS` set to the identity's name), by impersonation from a DBA's connection. That
+  covers the sequence, the lock, the column-level update, the audit insert and the refused audit change under the
+  identity's own grants. It is not the app's own process signing in as that account.
 
 **Not proven yet:**
 
-- No statement has run as the app identity. All release scripts have been applied, and the identity's effective
-  rights on the live database were read back from SQL Server while impersonating it and matched the list above.
-  To run the storage tests as the identity: apply `02-app-identity.test.sql` (the same script for the test
-  database), then set `RECORDS_TEST_SQL_AS` to the identity's name alongside `RECORDS_TEST_SQL`.
 - Nothing has run behind the real front door or under IIS. The path prefix and the forwarded host name are tested
   with a stand-in.
 - The database and the data folder are not one transaction. What that leaves: if the process dies between the

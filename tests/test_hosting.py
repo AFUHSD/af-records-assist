@@ -364,7 +364,15 @@ class SqlServer(unittest.TestCase):
                 with plain() as c:
                     c.execute("EXECUTE AS USER = ?;", run_as)
                     self.assertEqual(c.execute("SELECT USER_NAME();").fetchval(), run_as)
-                    yield c
+                    try:
+                        yield c
+                    finally:  # a pooled connection handed back while still impersonating is killed by the server
+                        try:
+                            c.rollback()
+                            c.execute("REVERT;")
+                            c.commit()
+                        except self.store._pyodbc.Error:
+                            pass
 
             self.store._connect = as_the_app
         if self.store.database() == "RecordsAssist":
